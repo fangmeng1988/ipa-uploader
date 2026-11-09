@@ -2,6 +2,12 @@
 
 面向 iOS 应用发布流程的 Windows 桌面工具：管理 Apple 签名证书、生成 App 备案所需信息、通过 App Store Connect API 直接上传 IPA，无需安装 Transporter 或 Xcode。
 
+## 下载
+
+Windows 用户可直接下载打包版：[最新 Release](https://github.com/fangmeng1988/ipa-uploader/releases/latest)
+
+首次运行如遇 SmartScreen 提示“未知发布者”，点击“更多信息 → 仍要运行”。
+
 ## 功能
 
 ### 上传
@@ -33,13 +39,13 @@
 
 ## 快速开始
 
-### 环境要求
+### 方式一：直接下载
 
-- Windows 10 / 11
-- Python 3.10 及以上
-- 依赖：`cryptography`
+从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.0-win64.zip`，解压后运行 `IPAUploader.exe`。
 
-### 运行
+### 方式二：从源码运行
+
+环境要求：Windows 10 / 11、Python 3.10 及以上。
 
 ```bat
 pip install -r requirements.txt
