@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+
+# 旧版图标与旧版可执行文件，不再使用
+beiming.ico
+
+# 本地环境
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
