@@ -44,9 +44,11 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 from tkinter.scrolledtext import ScrolledText
 
+from i18n import LANGUAGES, detect_system_language, get_language, set_language, t
+
 APP_TITLE = "IPA 上架助手"
 APP_AUTHOR = "fangmeng"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.4.0"
 PROJECT_URL = "https://github.com/fangmeng1988/ipa-uploader"
 APP_ICON = "ipa.ico"
 _DATA_ROOT = Path(os.environ.get("APPDATA") or Path.home())
@@ -71,6 +73,7 @@ DEFAULT_CONFIG = {
     "api_key_type": "team",
     "api_key_path": "",
     "default_ipa_dir": str(Path.home() / "Downloads"),
+    "language": "",
 }
 
 COLOR_OK = "#1e7b34"
@@ -150,24 +153,24 @@ def encrypt_config_payload(payload: dict, password: str) -> dict:
 def decrypt_config_payload(document: dict, password: str) -> dict:
     info = document.get("kdf") or {}
     if str(info.get("algorithm") or "pbkdf2-sha256").lower() != "pbkdf2-sha256":
-        raise ValueError("不支持的加密算法")
+        raise ValueError(t('不支持的加密算法'))
     try:
         iterations = int(info.get("iterations") or CONFIG_KDF_ITERATIONS)
         salt = base64.b64decode(info.get("salt") or "", validate=True)
         nonce = base64.b64decode(document.get("nonce") or "", validate=True)
         ciphertext = base64.b64decode(document.get("ciphertext") or "", validate=True)
     except Exception as exc:
-        raise ValueError("配置文件格式不正确") from exc
+        raise ValueError(t('配置文件格式不正确')) from exc
     if not 10_000 <= iterations <= 2_000_000 or len(salt) < 8 or len(nonce) != 12:
-        raise ValueError("配置文件参数异常")
+        raise ValueError(t('配置文件参数异常'))
     key = _derive_export_key(password, salt, iterations)
     try:
         plain = AESGCM(key).decrypt(nonce, ciphertext, CONFIG_EXPORT_AAD)
     except Exception as exc:
-        raise ValueError("密码错误或配置文件已损坏") from exc
+        raise ValueError(t('密码错误或配置文件已损坏')) from exc
     data = json.loads(plain.decode("utf-8"))
     if not isinstance(data, dict):
-        raise ValueError("配置文件内容不正确")
+        raise ValueError(t('配置文件内容不正确'))
     return data
 
 
@@ -175,32 +178,32 @@ def normalize_imported_config(document: dict) -> tuple[dict, bytes, str]:
     config = document.get("config") or {}
     key_file = document.get("key_file") or {}
     if not isinstance(config, dict) or not isinstance(key_file, dict):
-        raise ValueError("配置文件缺少 config 或 key_file 字段")
+        raise ValueError(t('配置文件缺少 config 或 key_file 字段'))
     key_id = str(config.get("api_key_id") or "").strip()
     issuer = str(config.get("api_issuer") or "").strip()
     key_type = str(config.get("api_key_type") or "team").lower()
     app_id = str(config.get("app_apple_id") or "").strip()
     if not key_id or not issuer:
-        raise ValueError("配置文件缺少 Key ID 或 Issuer ID")
+        raise ValueError(t('配置文件缺少 Key ID 或 Issuer ID'))
     if key_type not in ("team", "individual"):
         key_type = "team"
     if app_id and not app_id.isdigit():
-        raise ValueError("配置文件中的 App 数字 ID 不是纯数字")
+        raise ValueError(t('配置文件中的 App 数字 ID 不是纯数字'))
     content = str(key_file.get("content_b64") or "")
     if not content:
-        raise ValueError("配置文件中没有 .p8 私钥")
+        raise ValueError(t('配置文件中没有 .p8 私钥'))
     try:
         key_bytes = base64.b64decode(content, validate=True)
     except Exception as exc:
-        raise ValueError("私钥内容不是有效的 Base64") from exc
+        raise ValueError(t('私钥内容不是有效的 Base64')) from exc
     if CRYPTO_ERROR:
         if not key_bytes.startswith(b"-----BEGIN"):
-            raise ValueError("私钥内容不是有效的 PEM")
+            raise ValueError(t('私钥内容不是有效的 PEM'))
     else:
         try:
             serialization.load_pem_private_key(key_bytes, password=None)
         except Exception as exc:
-            raise ValueError("私钥内容不是有效的 PEM") from exc
+            raise ValueError(t('私钥内容不是有效的 PEM')) from exc
     safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", key_id)[:64] or "key"
     prefix = "ApiKey" if key_type == "individual" else "AuthKey"
     name = f"{prefix}_{safe_id}.p8"
@@ -242,8 +245,8 @@ def human_size(num: float) -> str:
 def human_duration(seconds: float) -> str:
     seconds = max(0, int(round(seconds)))
     if seconds < 60:
-        return f"{seconds} 秒"
-    return f"{seconds // 60} 分 {seconds % 60} 秒"
+        return t('{p0} 秒').format(p0=seconds)
+    return t('{p0} 分 {p1} 秒').format(p0=seconds // 60, p1=seconds % 60)
 
 
 def decode_bytes(raw: bytes) -> str:
@@ -277,7 +280,7 @@ def inspect_ipa(path: str) -> dict:
                     target = name
                     break
             if not target:
-                raise ValueError("包内未找到 Payload/*.app/Info.plist")
+                raise ValueError(t('包内未找到 Payload/*.app/Info.plist'))
             payload = plistlib.loads(archive.read(target))
         info["bundle_id"] = str(payload.get("CFBundleIdentifier", "") or "")
         info["version"] = str(payload.get("CFBundleShortVersionString", "") or "")
@@ -319,7 +322,7 @@ def _b64url(data: bytes) -> str:
 
 def _der_parse(data: bytes) -> tuple[int, bytes, int]:
     if len(data) < 2:
-        raise AscApiError("私钥格式异常")
+        raise AscApiError(t('私钥格式异常'))
     tag, pos = data[0], 1
     length = data[pos]
     pos += 1
@@ -348,7 +351,7 @@ def _read_ec_private_key(key_path: str) -> int:
     der = base64.b64decode(body)
     tag, content, _ = _der_parse(der)
     if tag != 0x30:
-        raise AscApiError(".p8 不是有效的 EC 私钥")
+        raise AscApiError(t('.p8 不是有效的 EC 私钥'))
     children = _der_children(content)
     inner = children
     if len(children) >= 3 and children[0][0] == 0x02 and children[1][0] == 0x30:
@@ -357,10 +360,10 @@ def _read_ec_private_key(key_path: str) -> int:
         if inner_tag == 0x30:
             inner = _der_children(inner_body)
     if len(inner) < 2 or inner[1][0] != 0x04:
-        raise AscApiError(".p8 不是有效的 EC 私钥")
+        raise AscApiError(t('.p8 不是有效的 EC 私钥'))
     scalar = int.from_bytes(inner[1][1], "big")
     if not 0 < scalar < _P256_N:
-        raise AscApiError(".p8 私钥内容无效")
+        raise AscApiError(t('.p8 私钥内容无效'))
     return scalar
 
 
@@ -432,7 +435,7 @@ class AscToken:
             payload["sub"] = "user"
         else:
             if not self.issuer:
-                raise AscApiError("团队密钥缺少 Issuer ID")
+                raise AscApiError(t('团队密钥缺少 Issuer ID'))
             payload["iss"] = self.issuer
         signing_input = "{}.{}".format(
             _b64url(json.dumps(header, separators=(",", ":")).encode()),
@@ -455,7 +458,7 @@ def _api_error_detail(body) -> str:
             ).strip()
             if text:
                 parts.append(text)
-    return "；".join(parts)
+    return t('；').join(parts)
 
 
 def api_request(method: str, path: str, token: str, payload: dict | None = None, timeout: float = 90) -> dict:
@@ -478,9 +481,9 @@ def api_request(method: str, path: str, token: str, payload: dict | None = None,
         except Exception:
             body = None
         detail = _api_error_detail(body) or decode_bytes(raw)[:300]
-        raise AscApiError(f"HTTP {exc.code}：{detail}") from None
+        raise AscApiError(t('HTTP {p0}：{p1}').format(p0=exc.code, p1=detail)) from None
     except urllib.error.URLError as exc:
-        raise AscApiError(f"网络错误：{exc.reason}") from None
+        raise AscApiError(t('网络错误：{p0}').format(p0=exc.reason)) from None
     return json.loads(raw) if raw else {}
 
 
@@ -490,7 +493,7 @@ def _put_chunk(operation: dict, handle, index: int, total: int) -> int:
     handle.seek(offset)
     chunk = handle.read(length)
     if len(chunk) != length:
-        raise AscApiError(f"分片 {index}/{total} 读取失败（文件长度与预留不一致）")
+        raise AscApiError(t('分片 {p0}/{p1} 读取失败（文件长度与预留不一致）').format(p0=index, p1=total))
     headers = {
         str(item.get("name")): str(item.get("value"))
         for item in operation.get("requestHeaders") or []
@@ -505,10 +508,10 @@ def _put_chunk(operation: dict, handle, index: int, total: int) -> int:
             response.read()
     except urllib.error.HTTPError as exc:
         raise AscApiError(
-            f"分片 {index}/{total} 上传失败：HTTP {exc.code} {decode_bytes(exc.read())[:200]}"
+            t('分片 {p0}/{p1} 上传失败：HTTP {p2} {p3}').format(p0=index, p1=total, p2=exc.code, p3=decode_bytes(exc.read())[:200])
         ) from None
     except urllib.error.URLError as exc:
-        raise AscApiError(f"分片 {index}/{total} 上传失败：{exc.reason}") from None
+        raise AscApiError(t('分片 {p0}/{p1} 上传失败：{p2}').format(p0=index, p1=total, p2=exc.reason)) from None
     return len(chunk)
 
 
@@ -548,17 +551,17 @@ def resolve_app_id(bundle_id: str, cfg: dict, token: "AscToken", emit) -> tuple[
             exact = preferred or exact
         if len(exact) == 1:
             app_id, remote_bundle, name = exact[0]
-            emit(f"已按 Bundle ID 识别应用：{name or app_id}（{remote_bundle} / {app_id}）")
+            emit(t('已按 Bundle ID 识别应用：{p0}（{p1} / {p2}）').format(p0=name or app_id, p1=remote_bundle, p2=app_id))
             return app_id, remote_bundle, name
         if exact:
             raise AscApiError(
-                "Bundle ID 匹配到多个应用（"
-                + "、".join(item[0] for item in exact)
-                + "），请在设置里填写 App 数字 ID"
+                t('Bundle ID 匹配到多个应用（')
+                + t('、').join(item[0] for item in exact)
+                + t('），请在设置里填写 App 数字 ID')
             )
-        raise AscApiError(f"App Store Connect 里没有 Bundle ID 为 {bundle_id} 的应用")
+        raise AscApiError(t('App Store Connect 里没有 Bundle ID 为 {p0} 的应用').format(p0=bundle_id))
     if not configured.isdigit():
-        raise AscApiError("无法从 IPA 读取 Bundle ID，请先在设置里填写 App 数字 ID")
+        raise AscApiError(t('无法从 IPA 读取 Bundle ID，请先在设置里填写 App 数字 ID'))
     app = api_request("GET", f"/v1/apps/{configured}", token.value()).get("data") or {}
     attrs = app.get("attributes") or {}
     return configured, str(attrs.get("bundleId") or ""), str(attrs.get("name") or "")
@@ -577,7 +580,7 @@ def upload_build_via_api(
     build = str(info.get("build") or "").strip()
     bundle_id = str(info.get("bundle_id") or "").strip()
     if not (version and build):
-        raise AscApiError("无法从 IPA 中读取版本号和构建号")
+        raise AscApiError(t('无法从 IPA 中读取版本号和构建号'))
 
     token = AscToken(
         key_path=key_path,
@@ -586,16 +589,16 @@ def upload_build_via_api(
         issuer=str(cfg.get("api_issuer") or "").strip(),
     )
 
-    emit("正在校验 API 凭据…")
+    emit(t('正在校验 API 凭据…'))
     app_id, remote_bundle, app_name = resolve_app_id(bundle_id, cfg, token, emit)
-    emit(f"应用已确认：{app_name or app_id} / {app_id} / {remote_bundle or '未知 Bundle ID'}")
+    emit(t('应用已确认：{p0} / {p1} / {p2}').format(p0=app_name or app_id, p1=app_id, p2=remote_bundle or t('未知 Bundle ID')))
     if bundle_id and remote_bundle and bundle_id != remote_bundle:
-        raise AscApiError(f"Bundle ID 不匹配：IPA 是 {bundle_id}，App 数字 ID 对应 {remote_bundle}")
+        raise AscApiError(t('Bundle ID 不匹配：IPA 是 {p0}，App 数字 ID 对应 {p1}').format(p0=bundle_id, p1=remote_bundle))
 
     if cancel_check():
         raise UploadCanceled()
 
-    emit(f"创建 BuildUpload：{version} ({build}) / IOS")
+    emit(t('创建 BuildUpload：{p0} ({p1}) / IOS').format(p0=version, p1=build))
     created = api_request(
         "POST", "/v1/buildUploads", token.value(),
         {
@@ -612,12 +615,12 @@ def upload_build_via_api(
     )
     upload_id = str((created.get("data") or {}).get("id") or "")
     if not upload_id:
-        raise AscApiError("创建 BuildUpload 失败：响应缺少 id")
-    emit(f"BuildUpload 已创建：{upload_id}")
+        raise AscApiError(t('创建 BuildUpload 失败：响应缺少 id'))
+    emit(t('BuildUpload 已创建：{p0}').format(p0=upload_id))
 
     size = os.path.getsize(ipa_path)
     file_name = Path(ipa_path).name
-    emit(f"预留上传文件：{file_name}（{human_size(size)}）")
+    emit(t('预留上传文件：{p0}（{p1}）').format(p0=file_name, p1=human_size(size)))
     reserved = api_request(
         "POST", "/v1/buildUploadFiles", token.value(),
         {
@@ -639,8 +642,8 @@ def upload_build_via_api(
     file_id = str(file_data.get("id") or "")
     operations = (file_data.get("attributes") or {}).get("uploadOperations") or []
     if not file_id or not operations:
-        raise AscApiError("预留上传文件失败：响应缺少 uploadOperations")
-    emit(f"开始上传，共 {len(operations)} 个分片")
+        raise AscApiError(t('预留上传文件失败：响应缺少 uploadOperations'))
+    emit(t('开始上传，共 {p0} 个分片').format(p0=len(operations)))
 
     uploaded = 0
     with open(ipa_path, "rb") as handle:
@@ -649,13 +652,13 @@ def upload_build_via_api(
                 raise UploadCanceled()
             uploaded += _put_chunk(operation, handle, index, len(operations))
             set_progress(uploaded / size * 100 if size else 100)
-            emit(f"分片 {index}/{len(operations)} 完成（{human_size(uploaded)} / {human_size(size)}）")
+            emit(t('分片 {p0}/{p1} 完成（{p2} / {p3}）').format(p0=index, p1=len(operations), p2=human_size(uploaded), p3=human_size(size)))
 
     if cancel_check():
         raise UploadCanceled()
 
     checksum = file_md5(ipa_path)
-    emit(f"提交校验（MD5 {checksum}）…")
+    emit(t('提交校验（MD5 {p0}）…').format(p0=checksum))
     api_request(
         "PATCH", f"/v1/buildUploadFiles/{file_id}", token.value(),
         {
@@ -671,7 +674,7 @@ def upload_build_via_api(
             }
         },
     )
-    emit("提交成功，等待 Apple 处理构建…")
+    emit(t('提交成功，等待 Apple 处理构建…'))
     set_progress(None)
 
     deadline = time.time() + 60 * 60
@@ -685,17 +688,17 @@ def upload_build_via_api(
         state_object = (data.get("attributes") or {}).get("state") or {}
         state = str(state_object.get("state") or "")
         if state and state != last_state:
-            emit(f"处理状态：{state}")
+            emit(t('处理状态：{p0}').format(p0=state))
             last_state = state
         for item in state_object.get("errors") or []:
-            emit("Apple 报错：" + _state_detail(item))
+            emit(t('Apple 报错：') + _state_detail(item))
         if state == "COMPLETE":
-            emit("Apple 已接收该构建并通过校验。")
+            emit(t('Apple 已接收该构建并通过校验。'))
             return {"upload_id": upload_id, "file_id": file_id, "state": state}
         if state == "FAILED":
-            details = "；".join(_state_detail(item) for item in state_object.get("errors") or [])
-            raise AscApiError("Apple 处理失败：" + (details or "未返回具体原因"))
-    raise AscApiError("等待 Apple 处理超时（60 分钟），请稍后到 TestFlight 查看")
+            details = t('；').join(_state_detail(item) for item in state_object.get("errors") or [])
+            raise AscApiError(t('Apple 处理失败：') + (details or t('未返回具体原因')))
+    raise AscApiError(t('等待 Apple 处理超时（60 分钟），请稍后到 TestFlight 查看'))
 
 
 # ---------------------------------------------------------------- 证书助手
@@ -848,7 +851,7 @@ def _profile_payload(raw: bytes) -> dict:
     start = raw.find(b"<?xml")
     end = raw.rfind(b"</plist>")
     if start < 0 or end < 0:
-        raise ValueError("不是有效的 .mobileprovision 文件")
+        raise ValueError(t('不是有效的 .mobileprovision 文件'))
     return plistlib.loads(raw[start:end + len(b"</plist>")])
 
 
@@ -875,7 +878,7 @@ def filing_info_from_profile(raw: bytes, source: str = "") -> dict:
         except Exception:
             continue
     if not certs:
-        raise ValueError("描述文件里没有可读取的证书")
+        raise ValueError(t('描述文件里没有可读取的证书'))
     preferred = certs[0]
     if len(certs) > 1:
         preferred = next((item for item in certs if "distribution" in item["cn"].lower()), certs[0])
@@ -885,7 +888,7 @@ def filing_info_from_profile(raw: bytes, source: str = "") -> dict:
         "cert_count": len(certs),
         "source": source,
         "profile_name": str(payload.get("Name") or ""),
-        "team": "、".join(payload.get("TeamIdentifier") or []),
+        "team": t('、').join(payload.get("TeamIdentifier") or []),
     }
 
 
@@ -898,7 +901,7 @@ def filing_info_from_p12(path: str, password: str) -> dict:
         Path(path).read_bytes(), password.encode("utf-8"),
     )
     if cert is None:
-        raise ValueError("P12 中没有证书")
+        raise ValueError(t('P12 中没有证书'))
     return filing_info_from_certificate(cert, source=path)
 
 
@@ -922,8 +925,7 @@ def filing_info_from_ipa(path: str) -> dict:
                 break
         if not profile_name:
             raise ValueError(
-                "IPA 中没有 embedded.mobileprovision（App Store 下载的包会被剥离），\n"
-                "请改用打包时使用的 .cer 或 .p12 文件。"
+                t('IPA 中没有 embedded.mobileprovision（App Store 下载的包会被剥离），\n请改用打包时使用的 .cer 或 .p12 文件。')
             )
         info = filing_info_from_profile(archive.read(profile_name), source=path)
     info["bundle_id"] = bundle_id or info["bundle_id"]
@@ -932,7 +934,7 @@ def filing_info_from_ipa(path: str) -> dict:
 
 def generate_key_and_csr(cn: str, algorithm: str = "rsa") -> tuple[bytes, bytes]:
     if not cn.strip():
-        raise ValueError("通用名称（CN）不能为空")
+        raise ValueError(t('通用名称（CN）不能为空'))
     if algorithm == "ec":
         key = ec.generate_private_key(ec.SECP256R1())
     else:
@@ -952,11 +954,11 @@ def generate_key_and_csr(cn: str, algorithm: str = "rsa") -> tuple[bytes, bytes]
 
 def build_p12(cer_path: str, key_path: str, out_path: str, password: str, chain_paths=()) -> dict:
     if not password:
-        raise ValueError("p12 密码不能为空")
+        raise ValueError(t('p12 密码不能为空'))
     cert = load_certificate_file(cer_path)
     key = serialization.load_pem_private_key(Path(key_path).read_bytes(), password=None)
     if cert.public_key().public_numbers() != key.public_key().public_numbers():
-        raise ValueError("证书与私钥不匹配，请确认选择的是同一对密钥。")
+        raise ValueError(t('证书与私钥不匹配，请确认选择的是同一对密钥。'))
     chain = []
     for item in chain_paths:
         if item and Path(item).is_file():
@@ -1022,7 +1024,7 @@ def parse_mobileprovision(path: str) -> dict:
         "uuid": str(payload.get("UUID") or ""),
         "type": profile_type,
         "app_id": str(entitlements.get("application-identifier") or ""),
-        "team": "、".join(payload.get("TeamIdentifier") or []),
+        "team": t('、').join(payload.get("TeamIdentifier") or []),
         "cert_serials": serials,
         "expires": expires,
         "expires_text": fmt_when(expires) if expires else "",
@@ -1045,12 +1047,12 @@ def _write_cert_content(content_b64: str, out_path: Path) -> Path:
         try:
             x509.load_pem_x509_certificate(raw)
         except Exception as exc:
-            raise AscApiError(f"Apple 返回的证书内容无法解析：{exc}") from None
+            raise AscApiError(t('Apple 返回的证书内容无法解析：{p0}').format(p0=exc)) from None
     else:
         try:
             x509.load_der_x509_certificate(raw)
         except Exception as exc:
-            raise AscApiError(f"Apple 返回的证书内容无法解析：{exc}") from None
+            raise AscApiError(t('Apple 返回的证书内容无法解析：{p0}').format(p0=exc)) from None
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(raw)
     return out_path
@@ -1152,7 +1154,7 @@ def download_remote_profile(token: AscToken, profile_id: str, out_dir: Path) -> 
     attrs = data.get("attributes") or {}
     content = str(attrs.get("profileContent") or "")
     if not content:
-        raise AscApiError("Apple 未返回描述文件内容")
+        raise AscApiError(t('Apple 未返回描述文件内容'))
     safe_name = re.sub(r"[^\w.\-]+", "_", str(attrs.get("name") or profile_id))
     out_path = out_dir / f"{safe_name}.mobileprovision"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1193,7 +1195,7 @@ def create_remote_profile(
     attrs = data.get("attributes") or {}
     content = str(attrs.get("profileContent") or "")
     if not content:
-        raise AscApiError("描述文件已创建，但 Apple 未返回文件内容")
+        raise AscApiError(t('描述文件已创建，但 Apple 未返回文件内容'))
     safe_name = re.sub(r"[^\w.\-]+", "_", name)
     target_dir = Path(out_dir) if out_dir else PROFILE_DIR
     out_path = target_dir / f"{safe_name}.mobileprovision"
@@ -1246,6 +1248,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.cfg = load_config()
+        set_language(self.cfg.get("language") or detect_system_language())
         self.history = load_history()
         self.events: queue.Queue = queue.Queue()
         self.uploading = False
@@ -1263,12 +1266,12 @@ class App(tk.Tk):
 
         if CONFIG_PATH.exists():
             self.nb.select(self.tab_upload)
-            self._status("请选择 IPA 文件后开始上传", "muted")
+            self._status(t('请选择 IPA 文件后开始上传'), "muted")
         else:
             self.nb.select(self.tab_settings)
-            self._status("请选择 IPA 文件后开始上传", "muted")
-            self._settings_status("首次使用：请先填写参数并保存", "muted")
-        self._log_line("就绪。选择 IPA 文件后点击“开始上传”。")
+            self._status(t('请选择 IPA 文件后开始上传'), "muted")
+            self._settings_status(t('首次使用：请先填写参数并保存'), "muted")
+        self._log_line(t('就绪。选择 IPA 文件后点击“开始上传”。'))
 
         self.refresh_history()
         self._refresh_cert_archive()
@@ -1285,7 +1288,7 @@ class App(tk.Tk):
 
         self.px = px
 
-        self.title(APP_TITLE)
+        self.title(t(APP_TITLE))
         icon = app_icon_path()
         if icon:
             try:
@@ -1326,13 +1329,13 @@ class App(tk.Tk):
         header.pack(fill="x")
         header.pack_propagate(False)
         tk.Label(
-            header, text=APP_TITLE, bg=COLOR_HEADER, fg="white",
+            header, text=t(APP_TITLE), bg=COLOR_HEADER, fg="white",
             font=(self.ui_family, 16, "bold"),
         ).pack(side="left", padx=px(22))
         meta = tk.Frame(header, bg=COLOR_HEADER)
         meta.pack(side="right", padx=px(22))
         tk.Label(
-            meta, text="证书 · 备案 · 上架", bg=COLOR_HEADER, fg="#9fb6cf",
+            meta, text=t('证书 · 备案 · 上架'), bg=COLOR_HEADER, fg="#9fb6cf",
             font=(self.ui_family, 9),
         ).pack(anchor="e")
         tk.Label(
@@ -1346,10 +1349,10 @@ class App(tk.Tk):
         self.tab_cert = ttk.Frame(self.nb, padding=px(14))
         self.tab_filing = ttk.Frame(self.nb, padding=px(14))
         self.tab_settings = ttk.Frame(self.nb, padding=px(14))
-        self.nb.add(self.tab_upload, text=" 上传 ")
-        self.nb.add(self.tab_cert, text=" 证书 ")
-        self.nb.add(self.tab_filing, text=" 备案 ")
-        self.nb.add(self.tab_settings, text=" 设置 ")
+        self.nb.add(self.tab_upload, text=t(' 上传 '))
+        self.nb.add(self.tab_cert, text=t(' 证书 '))
+        self.nb.add(self.tab_filing, text=t(' 备案 '))
+        self.nb.add(self.tab_settings, text=t(' 设置 '))
 
         self._build_upload_tab()
         self._build_cert_tab()
@@ -1364,19 +1367,19 @@ class App(tk.Tk):
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
 
-        pkg = ttk.LabelFrame(tab, text=" 应用包 ", padding=(px(14), px(12)))
+        pkg = ttk.LabelFrame(tab, text=t(' 应用包 '), padding=(px(14), px(12)))
         pkg.grid(row=0, column=0, sticky="ew")
         pkg.columnconfigure(1, weight=1)
 
-        self.btn_pick = ttk.Button(pkg, text="选择 IPA 文件…", command=self.pick_ipa)
+        self.btn_pick = ttk.Button(pkg, text=t('选择 IPA 文件…'), command=self.pick_ipa)
         self.btn_pick.grid(row=0, column=0, sticky="w")
-        self.lbl_ipa = ttk.Label(pkg, text="尚未选择文件", foreground=COLOR_MUTED)
+        self.lbl_ipa = ttk.Label(pkg, text=t('尚未选择文件'), foreground=COLOR_MUTED)
         self.lbl_ipa.grid(row=0, column=1, sticky="w", padx=(px(12), 0))
 
         info = ttk.Frame(pkg)
         info.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(12), 0))
         self.info_vars: dict[str, tk.StringVar] = {}
-        captions = [("bundle", "Bundle ID"), ("version", "版本号"), ("build", "构建号"), ("size", "文件大小")]
+        captions = [("bundle", "Bundle ID"), ("version", t('版本号')), ("build", t('构建号')), ("size", t('文件大小'))]
         for index, (key, caption) in enumerate(captions):
             info.columnconfigure(index, weight=1)
             cell = ttk.Frame(info)
@@ -1386,13 +1389,13 @@ class App(tk.Tk):
             self.info_vars[key] = var
             ttk.Label(cell, textvariable=var, style="Value.TLabel").pack(anchor="w")
 
-        up = ttk.LabelFrame(tab, text=" 上传 ", padding=(px(14), px(12)))
+        up = ttk.LabelFrame(tab, text=t(' 上传 '), padding=(px(14), px(12)))
         up.grid(row=1, column=0, sticky="ew", pady=(px(12), 0))
         up.columnconfigure(2, weight=1)
 
-        self.btn_upload = ttk.Button(up, text="开始上传", command=self.start_upload)
+        self.btn_upload = ttk.Button(up, text=t('开始上传'), command=self.start_upload)
         self.btn_upload.grid(row=0, column=0, sticky="w")
-        self.btn_cancel = ttk.Button(up, text="取消", command=self.cancel_upload, state="disabled")
+        self.btn_cancel = ttk.Button(up, text=t('取消'), command=self.cancel_upload, state="disabled")
         self.btn_cancel.grid(row=0, column=1, sticky="w", padx=(px(8), 0))
         self.lbl_status = ttk.Label(up, text="", foreground=COLOR_MUTED)
         self.lbl_status.grid(row=0, column=2, sticky="w", padx=(px(14), 0))
@@ -1407,15 +1410,15 @@ class App(tk.Tk):
         )
         self.log_text.grid(row=2, column=0, columnspan=3, sticky="ew")
 
-        hist = ttk.LabelFrame(tab, text=" 上传历史 ", padding=(px(14), px(12)))
+        hist = ttk.LabelFrame(tab, text=t(' 上传历史 '), padding=(px(14), px(12)))
         hist.grid(row=2, column=0, sticky="nsew", pady=(px(12), 0))
         hist.columnconfigure(0, weight=1)
         hist.rowconfigure(0, weight=1)
 
         columns = ("time", "name", "version", "size", "status", "duration")
         headings = {
-            "time": "上传时间", "name": "文件", "version": "版本(构建)",
-            "size": "大小", "status": "结果", "duration": "耗时",
+            "time": t('上传时间'), "name": t('文件'), "version": t('版本(构建)'),
+            "size": t('大小'), "status": t('结果'), "duration": t('耗时'),
         }
         widths = {"time": 160, "name": 300, "version": 120, "size": 100, "status": 80, "duration": 90}
         self.tree = ttk.Treeview(hist, columns=columns, show="headings", selectmode="browse")
@@ -1435,19 +1438,19 @@ class App(tk.Tk):
 
         buttons = ttk.Frame(hist)
         buttons.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(10), 0))
-        ttk.Button(buttons, text="打开日志", command=self.open_selected_log).pack(side="left")
-        ttk.Button(buttons, text="打开所在目录", command=self.reveal_selected_log).pack(side="left", padx=px(8))
-        ttk.Button(buttons, text="复制命令", command=self.copy_selected_command).pack(side="left")
-        ttk.Button(buttons, text="清空历史", command=self.clear_history).pack(side="right")
-        ttk.Button(buttons, text="日志目录", command=self.open_log_dir).pack(side="right", padx=px(8))
-        ttk.Label(buttons, text="双击记录可查看日志", style="Hint.TLabel").pack(side="left", padx=(px(16), 0))
+        ttk.Button(buttons, text=t('打开日志'), command=self.open_selected_log).pack(side="left")
+        ttk.Button(buttons, text=t('打开所在目录'), command=self.reveal_selected_log).pack(side="left", padx=px(8))
+        ttk.Button(buttons, text=t('复制命令'), command=self.copy_selected_command).pack(side="left")
+        ttk.Button(buttons, text=t('清空历史'), command=self.clear_history).pack(side="right")
+        ttk.Button(buttons, text=t('日志目录'), command=self.open_log_dir).pack(side="right", padx=px(8))
+        ttk.Label(buttons, text=t('双击记录可查看日志'), style="Hint.TLabel").pack(side="left", padx=(px(16), 0))
 
         self.history_menu = tk.Menu(self, tearoff=False)
-        self.history_menu.add_command(label="查看日志", command=self.open_selected_log)
-        self.history_menu.add_command(label="打开所在目录", command=self.reveal_selected_log)
-        self.history_menu.add_command(label="复制上传命令", command=self.copy_selected_command)
+        self.history_menu.add_command(label=t('查看日志'), command=self.open_selected_log)
+        self.history_menu.add_command(label=t('打开所在目录'), command=self.reveal_selected_log)
+        self.history_menu.add_command(label=t('复制上传命令'), command=self.copy_selected_command)
         self.history_menu.add_separator()
-        self.history_menu.add_command(label="删除这条记录", command=self.delete_selected_record)
+        self.history_menu.add_command(label=t('删除这条记录'), command=self.delete_selected_record)
 
     # ------------------------------------------------------------ 设置页
 
@@ -1462,7 +1465,7 @@ class App(tk.Tk):
 
         ttk.Label(
             acct,
-            text="使用 App Store Connect API Key（.p8）直传，不需要安装 Transporter。",
+            text=t('使用 App Store Connect API Key（.p8）直传，不需要安装 Transporter。'),
             style="Hint.TLabel",
         ).grid(row=0, column=0, columnspan=4, sticky="w")
 
@@ -1478,7 +1481,7 @@ class App(tk.Tk):
             row=2, column=1, sticky="ew", padx=px(8), pady=(px(8), 0),
         )
 
-        ttk.Label(acct, text="Key 类型").grid(row=3, column=0, sticky="w", pady=(px(8), 0))
+        ttk.Label(acct, text=t('Key 类型')).grid(row=3, column=0, sticky="w", pady=(px(8), 0))
         self.var_key_type = tk.StringVar(value="team")
         types = ttk.Frame(acct)
         types.grid(row=3, column=1, sticky="w", padx=px(8), pady=(px(8), 0))
@@ -1487,61 +1490,76 @@ class App(tk.Tk):
             side="left", padx=(px(12), 0),
         )
 
-        ttk.Label(acct, text=".p8 文件").grid(row=4, column=0, sticky="w", pady=(px(8), 0))
+        ttk.Label(acct, text=t('.p8 文件')).grid(row=4, column=0, sticky="w", pady=(px(8), 0))
         self.var_key_path = tk.StringVar()
         ttk.Entry(acct, textvariable=self.var_key_path).grid(
             row=4, column=1, sticky="ew", padx=px(8), pady=(px(8), 0),
         )
-        ttk.Button(acct, text="浏览…", command=self._browse_key_file).grid(row=4, column=2, pady=(px(8), 0))
+        ttk.Button(acct, text=t('浏览…'), command=self._browse_key_file).grid(row=4, column=2, pady=(px(8), 0))
         ttk.Label(
             acct,
-            text="在 App Store Connect → 用户和访问 → 集成 中创建密钥并下载 .p8。",
+            text=t('在 App Store Connect → 用户和访问 → 集成 中创建密钥并下载 .p8。'),
             style="Hint.TLabel",
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(px(6), 0))
 
-        ttk.Label(acct, text="App 数字 ID（可留空）").grid(row=6, column=0, sticky="w", pady=(px(12), 0))
+        ttk.Label(acct, text=t('App 数字 ID（可留空）')).grid(row=6, column=0, sticky="w", pady=(px(12), 0))
         self.var_app_id = tk.StringVar()
         ttk.Entry(acct, textvariable=self.var_app_id).grid(
             row=6, column=1, sticky="ew", padx=px(8), pady=(px(12), 0),
         )
         ttk.Label(
             acct,
-            text="留空时按 IPA 的 Bundle ID 自动识别应用。",
+            text=t('留空时按 IPA 的 Bundle ID 自动识别应用。'),
             style="Hint.TLabel",
         ).grid(row=7, column=0, columnspan=4, sticky="w", pady=(px(6), 0))
 
-        other = ttk.LabelFrame(tab, text=" 其他 ", padding=(px(14), px(12)))
+        other = ttk.LabelFrame(tab, text=t(' 其他 '), padding=(px(14), px(12)))
         other.grid(row=1, column=0, sticky="ew", pady=(px(12), 0))
         other.columnconfigure(1, weight=1)
 
-        ttk.Label(other, text="默认 IPA 目录").grid(row=0, column=0, sticky="w")
+        ttk.Label(other, text=t('默认 IPA 目录')).grid(row=0, column=0, sticky="w")
         self.var_ipa_dir = tk.StringVar()
         ttk.Entry(other, textvariable=self.var_ipa_dir).grid(row=0, column=1, sticky="ew", padx=px(8))
-        ttk.Button(other, text="浏览…", command=lambda: self._browse_dir(self.var_ipa_dir)).grid(row=0, column=2)
+        ttk.Button(other, text=t('浏览…'), command=lambda: self._browse_dir(self.var_ipa_dir)).grid(row=0, column=2)
 
-        transfer = ttk.LabelFrame(tab, text=" 配置迁移 ", padding=(px(14), px(12)))
+        ttk.Label(other, text="界面语言 / Language").grid(row=1, column=0, sticky="w", pady=(px(10), 0))
+        self.var_language = tk.StringVar(value=LANGUAGES.get(get_language(), "中文"))
+        lang_row = ttk.Frame(other)
+        lang_row.grid(row=1, column=1, sticky="w", padx=px(8), pady=(px(10), 0))
+        ttk.Combobox(
+            lang_row, textvariable=self.var_language, values=list(LANGUAGES.values()),
+            state="readonly", width=16,
+        ).pack(side="left")
+        ttk.Button(
+            lang_row, text=t('应用'), command=self._apply_language,
+        ).pack(side="left", padx=(px(8), 0))
+        ttk.Label(
+            other, text=t('切换后需重启应用生效'), style="Hint.TLabel",
+        ).grid(row=1, column=2, sticky="w", pady=(px(10), 0))
+
+        transfer = ttk.LabelFrame(tab, text=t(' 配置迁移 '), padding=(px(14), px(12)))
         transfer.grid(row=2, column=0, sticky="ew", pady=(px(12), 0))
-        ttk.Button(transfer, text="导出配置…", command=self.export_config).pack(side="left")
-        ttk.Button(transfer, text="导入配置…", command=self.import_config).pack(side="left", padx=px(8))
+        ttk.Button(transfer, text=t('导出配置…'), command=self.export_config).pack(side="left")
+        ttk.Button(transfer, text=t('导入配置…'), command=self.import_config).pack(side="left", padx=px(8))
         ttk.Label(
             transfer,
-            text="导出的 .ipak 含 API 私钥，可选密码加密；请通过可信渠道传输。",
+            text=t('导出的 .ipak 含 API 私钥，可选密码加密；请通过可信渠道传输。'),
             style="Hint.TLabel",
         ).pack(side="left", padx=(px(12), 0))
 
-        about = ttk.LabelFrame(tab, text=" 关于 ", padding=(px(14), px(12)))
+        about = ttk.LabelFrame(tab, text=t(' 关于 '), padding=(px(14), px(12)))
         about.grid(row=3, column=0, sticky="ew", pady=(px(12), 0))
-        ttk.Label(about, text=f"{APP_TITLE} v{APP_VERSION}", style="Value.TLabel").pack(side="left")
+        ttk.Label(about, text=f"{t(APP_TITLE)} v{APP_VERSION}", style="Value.TLabel").pack(side="left")
         ttk.Label(
-            about, text=f"作者：{APP_AUTHOR}", style="Hint.TLabel",
+            about, text=t('作者：{p0}').format(p0=APP_AUTHOR), style="Hint.TLabel",
         ).pack(side="left", padx=(px(16), 0))
         ttk.Button(
-            about, text="项目主页", command=lambda: webbrowser.open(PROJECT_URL),
+            about, text=t('项目主页'), command=lambda: webbrowser.open(PROJECT_URL),
         ).pack(side="right")
 
         actions = ttk.Frame(tab)
         actions.grid(row=4, column=0, sticky="w", pady=(px(16), 0))
-        ttk.Button(actions, text="保存设置", command=self.save_settings).pack(side="left")
+        ttk.Button(actions, text=t('保存设置'), command=self.save_settings).pack(side="left")
         self.lbl_settings_status = ttk.Label(actions, text="", foreground=COLOR_MUTED)
         self.lbl_settings_status.pack(side="left", padx=(px(14), 0))
 
@@ -1555,6 +1573,7 @@ class App(tk.Tk):
         self.var_key_type.set(cfg.get("api_key_type", "team"))
         self.var_key_path.set(cfg.get("api_key_path", ""))
         self.var_ipa_dir.set(cfg.get("default_ipa_dir", ""))
+        self.var_language.set(LANGUAGES.get(cfg.get("language") or get_language(), "中文"))
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         current = var.get() if var.get() and Path(var.get()).exists() else str(Path.home())
@@ -1564,8 +1583,8 @@ class App(tk.Tk):
 
     def _browse_key_file(self) -> None:
         chosen = filedialog.askopenfilename(
-            title="选择 API 私钥",
-            filetypes=[("API 私钥", "*.p8"), ("所有文件", "*.*")],
+            title=t('选择 API 私钥'),
+            filetypes=[(t('API 私钥'), "*.p8"), (t('所有文件'), "*.*")],
         )
         if chosen:
             self.var_key_path.set(chosen)
@@ -1575,18 +1594,18 @@ class App(tk.Tk):
         app_apple_id = self.var_app_id.get().strip()
         if app_apple_id and not app_apple_id.isdigit():
             messagebox.showerror(
-                "参数无效",
-                "App 数字 ID 只能填纯数字，留空则按 IPA 的 Bundle ID 自动识别。",
+                t('参数无效'),
+                t('App 数字 ID 只能填纯数字，留空则按 IPA 的 Bundle ID 自动识别。'),
             )
             return
         key_id = self.var_key_id.get().strip()
         issuer = self.var_issuer.get().strip()
         key_path = self.var_key_path.get().strip()
         if not key_id or not issuer:
-            messagebox.showerror("缺少参数", "请填写 API Key 的 Key ID 和 Issuer ID。")
+            messagebox.showerror(t('缺少参数'), t('请填写 API Key 的 Key ID 和 Issuer ID。'))
             return
         if not Path(key_path).is_file():
-            messagebox.showerror("缺少参数", "请选择有效的 .p8 私钥文件。")
+            messagebox.showerror(t('缺少参数'), t('请选择有效的 .p8 私钥文件。'))
             return
 
         cfg["app_apple_id"] = app_apple_id
@@ -1595,20 +1614,61 @@ class App(tk.Tk):
         cfg["api_key_type"] = self.var_key_type.get() or "team"
         cfg["api_key_path"] = key_path
         cfg["default_ipa_dir"] = self.var_ipa_dir.get().strip()
+        new_language = "en" if self.var_language.get() == "English" else "zh"
+        cfg["language"] = new_language
         try:
             self._store_api_key(cfg)
         except Exception as exc:
-            messagebox.showerror("私钥复制失败", str(exc))
+            messagebox.showerror(t('私钥复制失败'), str(exc))
             return
 
         save_config(cfg)
         self.cfg = cfg
-        self._settings_status("设置已保存", "ok")
+        self._settings_status(t('设置已保存'), "ok")
+        if new_language != get_language():
+            if messagebox.askyesno(
+                t('需要重启'),
+                t('界面语言已更改，需要重启应用后生效。\n\n现在重启吗？'),
+            ):
+                self._restart_app()
+            return
         self.nb.select(self.tab_upload)
         if self.current_ipa:
-            self._status("设置已保存，可以开始上传", "muted")
+            self._status(t('设置已保存，可以开始上传'), "muted")
         else:
-            self._status("请选择 IPA 文件后开始上传", "muted")
+            self._status(t('请选择 IPA 文件后开始上传'), "muted")
+
+    def _apply_language(self) -> None:
+        new_language = "en" if self.var_language.get() == "English" else "zh"
+        if new_language == get_language():
+            self._settings_status(t('语言未更改'), "muted")
+            return
+        cfg = dict(self.cfg)
+        cfg["language"] = new_language
+        save_config(cfg)
+        self.cfg = cfg
+        self._settings_status(t('语言设置已保存'), "ok")
+        if messagebox.askyesno(
+            t('需要重启'),
+            t('界面语言已更改，需要重启应用后生效。\n\n现在重启吗？'),
+        ):
+            self._restart_app()
+
+    def _restart_app(self) -> None:
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable], close_fds=True)
+            else:
+                subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve())], close_fds=True,
+                )
+        except Exception as exc:
+            messagebox.showerror(
+                t('重启失败'),
+                t('请手动关闭并重新打开应用。\n\n{err}').format(err=exc),
+            )
+            return
+        self.destroy()
 
     def _store_api_key(self, cfg: dict) -> Path:
         source = Path(cfg["api_key_path"])
@@ -1627,20 +1687,20 @@ class App(tk.Tk):
         key_path = self.var_key_path.get().strip()
         app_id = self.var_app_id.get().strip()
         if not key_id or not issuer:
-            raise ValueError("请先填写 Key ID 与 Issuer ID。")
+            raise ValueError(t('请先填写 Key ID 与 Issuer ID。'))
         if app_id and not app_id.isdigit():
-            raise ValueError("App 数字 ID 只能填纯数字。")
+            raise ValueError(t('App 数字 ID 只能填纯数字。'))
         if not key_path or not Path(key_path).is_file():
-            raise ValueError("当前 .p8 私钥文件不存在，请重新选择。")
+            raise ValueError(t('当前 .p8 私钥文件不存在，请重新选择。'))
         key_bytes = Path(key_path).read_bytes()
         if CRYPTO_ERROR:
             if not key_bytes.startswith(b"-----BEGIN"):
-                raise ValueError("当前 .p8 不是有效的 PEM 私钥。")
+                raise ValueError(t('当前 .p8 不是有效的 PEM 私钥。'))
         else:
             try:
                 serialization.load_pem_private_key(key_bytes, password=None)
             except Exception as exc:
-                raise ValueError("当前 .p8 不是有效的私钥文件。") from exc
+                raise ValueError(t('当前 .p8 不是有效的私钥文件。')) from exc
         return {
             "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "config": {
@@ -1659,32 +1719,31 @@ class App(tk.Tk):
         try:
             payload = self._collect_export_payload()
         except Exception as exc:
-            messagebox.showerror("无法导出", str(exc))
+            messagebox.showerror(t('无法导出'), str(exc))
             return
         password = self._ask_simple_password(
-            "导出配置", "设置导出密码（可留空；留空则明文保存）：",
+            t('导出配置'), t('设置导出密码（可留空；留空则明文保存）：'),
         )
         if password is None:
             return
         if password and CRYPTO_ERROR:
-            messagebox.showerror("缺少依赖", "加密导出需要 cryptography 库。\n\n" + CRYPTO_ERROR)
+            messagebox.showerror(t('缺少依赖'), t('加密导出需要 cryptography 库。\n\n') + CRYPTO_ERROR)
             return
         if not password and not messagebox.askyesno(
-            "未加密导出",
-            "未设置密码时，.p8 私钥会以明文（Base64）写入导出文件。\n\n"
-            "请仅通过可信渠道传输，并在使用后及时删除。确定继续吗？",
+            t('未加密导出'),
+            t('未设置密码时，.p8 私钥会以明文（Base64）写入导出文件。\n\n请仅通过可信渠道传输，并在使用后及时删除。确定继续吗？'),
             icon="warning",
         ):
             return
         chosen = filedialog.asksaveasfilename(
-            title="导出配置",
+            title=t('导出配置'),
             initialdir=str(Path.home()),
-            initialfile=f"IPAUploader-配置-{datetime.now():%Y%m%d}.ipak",
+            initialfile=t('IPAUploader-配置-{p0:%Y%m%d}.ipak').format(p0=datetime.now()),
             defaultextension=".ipak",
             filetypes=[
-                ("IPA 上架助手配置", "*.ipak"),
-                ("JSON 文件", "*.json"),
-                ("所有文件", "*.*"),
+                (t('IPA 上架助手配置'), "*.ipak"),
+                (t('JSON 文件'), "*.json"),
+                (t('所有文件'), "*.*"),
             ],
         )
         if not chosen:
@@ -1702,55 +1761,50 @@ class App(tk.Tk):
             )
             Path(chosen).write_text(json.dumps(document, ensure_ascii=False, indent=2), "utf-8")
         except Exception as exc:
-            messagebox.showerror("导出失败", str(exc))
+            messagebox.showerror(t('导出失败'), str(exc))
             return
-        self._settings_status(f"配置已导出：{Path(chosen).name}", "ok")
+        self._settings_status(t('配置已导出：{p0}').format(p0=Path(chosen).name), "ok")
 
     def import_config(self) -> None:
         chosen = filedialog.askopenfilename(
-            title="导入配置",
-            filetypes=[("IPA 上架助手配置", "*.ipak *.json"), ("所有文件", "*.*")],
+            title=t('导入配置'),
+            filetypes=[(t('IPA 上架助手配置'), "*.ipak *.json"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
         try:
             document = json.loads(Path(chosen).read_text("utf-8"))
         except Exception as exc:
-            messagebox.showerror("无法读取", f"不是有效的 JSON 文件：\n{exc}")
+            messagebox.showerror(t('无法读取'), t('不是有效的 JSON 文件：\n{p0}').format(p0=exc))
             return
         if not isinstance(document, dict) or document.get("app") != CONFIG_EXPORT_APP:
-            messagebox.showerror("不是本工具的配置", "请选择由“导出配置”生成的 .ipak 文件。")
+            messagebox.showerror(t('不是本工具的配置'), t('请选择由“导出配置”生成的 .ipak 文件。'))
             return
         if document.get("format") != CONFIG_EXPORT_FORMAT:
-            messagebox.showerror("版本不支持", "该配置文件的格式版本与本工具不一致。")
+            messagebox.showerror(t('版本不支持'), t('该配置文件的格式版本与本工具不一致。'))
             return
         payload = document
         if document.get("encrypted"):
             if CRYPTO_ERROR:
-                messagebox.showerror("缺少依赖", "解密配置需要 cryptography 库。\n\n" + CRYPTO_ERROR)
+                messagebox.showerror(t('缺少依赖'), t('解密配置需要 cryptography 库。\n\n') + CRYPTO_ERROR)
                 return
-            password = self._ask_simple_password("导入配置", "请输入导出时设置的密码：")
+            password = self._ask_simple_password(t('导入配置'), t('请输入导出时设置的密码：'))
             if password is None:
                 return
             try:
                 payload = decrypt_config_payload(document, password)
             except Exception as exc:
-                messagebox.showerror("无法导入", str(exc))
+                messagebox.showerror(t('无法导入'), str(exc))
                 return
         try:
             imported, key_bytes, key_name = normalize_imported_config(payload)
         except Exception as exc:
-            messagebox.showerror("配置内容无效", str(exc))
+            messagebox.showerror(t('配置内容无效'), str(exc))
             return
         summary = (
-            f"Key ID：{imported['api_key_id']}\n"
-            f"Issuer ID：{imported['api_issuer']}\n"
-            f"Key 类型：{'Individual' if imported['api_key_type'] == 'individual' else 'Team'}\n"
-            f"App 数字 ID：{imported['app_apple_id'] or '（自动识别）'}\n"
-            f"私钥文件：{key_name}\n\n"
-            "导入后将覆盖当前 API 配置；本机“默认 IPA 目录”保持不变。"
+            t('Key ID：{p0}\nIssuer ID：{p1}\nKey 类型：{p2}\nApp 数字 ID：{p3}\n私钥文件：{p4}\n\n导入后将覆盖当前 API 配置；本机“默认 IPA 目录”保持不变。').format(p0=imported['api_key_id'], p1=imported['api_issuer'], p2='Individual' if imported['api_key_type'] == 'individual' else 'Team', p3=imported['app_apple_id'] or t('（自动识别）'), p4=key_name)
         )
-        if not messagebox.askyesno("导入配置", summary + "\n\n确定导入吗？"):
+        if not messagebox.askyesno(t('导入配置'), summary + t('\n\n确定导入吗？')):
             return
         try:
             KEYS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1769,12 +1823,12 @@ class App(tk.Tk):
             cfg["api_key_path"] = str(target)
             save_config(cfg)
         except Exception as exc:
-            messagebox.showerror("导入失败", str(exc))
+            messagebox.showerror(t('导入失败'), str(exc))
             return
         self.cfg = cfg
         self._load_settings_into_form()
-        self._settings_status(f"配置已导入：{imported['api_key_id']}", "ok")
-        self._status("配置已导入，可以选择 IPA 开始上传", "muted")
+        self._settings_status(t('配置已导入：{p0}').format(p0=imported['api_key_id']), "ok")
+        self._status(t('配置已导入，可以选择 IPA 开始上传'), "muted")
 
     # ------------------------------------------------------------ 证书页
 
@@ -1784,26 +1838,26 @@ class App(tk.Tk):
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
 
-        archive = ttk.LabelFrame(tab, text=" 证书档案 ", padding=(px(14), px(12)))
+        archive = ttk.LabelFrame(tab, text=t(' 证书档案 '), padding=(px(14), px(12)))
         archive.grid(row=0, column=0, sticky="ew")
         archive.columnconfigure(0, weight=1)
 
         bar = ttk.Frame(archive)
         bar.grid(row=0, column=0, sticky="ew")
-        ttk.Button(bar, text="新建证书申请…", command=self._open_cert_wizard).pack(side="left")
-        ttk.Button(bar, text="从 Apple 同步证书", command=self._cert_sync_certificates).pack(
+        ttk.Button(bar, text=t('新建证书申请…'), command=self._open_cert_wizard).pack(side="left")
+        ttk.Button(bar, text=t('从 Apple 同步证书'), command=self._cert_sync_certificates).pack(
             side="left", padx=px(8),
         )
-        ttk.Button(bar, text="导入 .cer…", command=self._cert_import_cer).pack(side="left")
-        ttk.Button(bar, text="合成 P12…", command=self._cert_export_p12).pack(side="left", padx=px(8))
-        ttk.Button(bar, text="移除档案", command=self._cert_delete_entry).pack(side="left")
-        ttk.Button(bar, text="打开证书目录", command=self._cert_open_dir).pack(side="right")
-        ttk.Button(bar, text="刷新", command=self._refresh_cert_archive).pack(side="right", padx=px(8))
+        ttk.Button(bar, text=t('导入 .cer…'), command=self._cert_import_cer).pack(side="left")
+        ttk.Button(bar, text=t('合成 P12…'), command=self._cert_export_p12).pack(side="left", padx=px(8))
+        ttk.Button(bar, text=t('移除档案'), command=self._cert_delete_entry).pack(side="left")
+        ttk.Button(bar, text=t('打开证书目录'), command=self._cert_open_dir).pack(side="right")
+        ttk.Button(bar, text=t('刷新'), command=self._refresh_cert_archive).pack(side="right", padx=px(8))
 
         columns = ("name", "type", "expires", "left", "key", "p12")
         headings = {
-            "name": "名称", "type": "类型", "expires": "有效期至",
-            "left": "剩余", "key": "私钥", "p12": "P12",
+            "name": t('名称'), "type": t('类型'), "expires": t('有效期至'),
+            "left": t('剩余'), "key": t('私钥'), "p12": "P12",
         }
         widths = {"name": 240, "type": 200, "expires": 110, "left": 90, "key": 70, "p12": 80}
         self.cert_tree = ttk.Treeview(archive, columns=columns, show="headings", selectmode="browse", height=7)
@@ -1818,7 +1872,7 @@ class App(tk.Tk):
         self.cert_tree.bind("<<TreeviewSelect>>", lambda _event: self._show_cert_detail())
         self.cert_tree.bind("<Double-1>", self._on_cert_double_click)
         ttk.Label(
-            archive, text="提示：双击“私钥”或“P12”列，可直接选择本地文件补充。",
+            archive, text=t('提示：双击“私钥”或“P12”列，可直接选择本地文件补充。'),
             style="Hint.TLabel",
         ).grid(row=2, column=0, sticky="w", pady=(px(6), 0))
 
@@ -1828,27 +1882,27 @@ class App(tk.Tk):
         bottom.columnconfigure(1, weight=2)
         bottom.rowconfigure(0, weight=1)
 
-        prof = ttk.LabelFrame(bottom, text=" 描述文件（Provisioning Profile） ", padding=(px(12), px(10)))
+        prof = ttk.LabelFrame(bottom, text=t(' 描述文件（Provisioning Profile） '), padding=(px(12), px(10)))
         prof.grid(row=0, column=0, sticky="nsew", padx=(0, px(12)))
         prof.columnconfigure(0, weight=1)
         prof.rowconfigure(1, weight=1)
 
         pbar = ttk.Frame(prof)
         pbar.grid(row=0, column=0, sticky="ew")
-        ttk.Button(pbar, text="拉取列表", command=self._cert_refresh_profiles).pack(side="left")
-        ttk.Button(pbar, text="下载选中", command=self._cert_download_profiles).pack(side="left", padx=px(8))
-        ttk.Button(pbar, text="导入文件…", command=self._cert_import_profile).pack(side="left")
-        ttk.Button(pbar, text="新建…", command=self._cert_create_profile_dialog).pack(side="right")
+        ttk.Button(pbar, text=t('拉取列表'), command=self._cert_refresh_profiles).pack(side="left")
+        ttk.Button(pbar, text=t('下载选中'), command=self._cert_download_profiles).pack(side="left", padx=px(8))
+        ttk.Button(pbar, text=t('导入文件…'), command=self._cert_import_profile).pack(side="left")
+        ttk.Button(pbar, text=t('新建…'), command=self._cert_create_profile_dialog).pack(side="right")
         ttk.Button(
-            pbar, text="网站", command=lambda: webbrowser.open(PORTAL_PROFILE_URL),
+            pbar, text=t('网站'), command=lambda: webbrowser.open(PORTAL_PROFILE_URL),
         ).pack(side="right", padx=px(8))
 
         pcolumns = ("name", "source", "type", "state", "expires", "uuid")
         pheadings = {
-            "name": "名称", "source": "来源", "type": "类型",
-            "state": "状态", "expires": "到期", "uuid": "UUID",
+            "name": t('名称'), "source": t('来源'), "type": t('类型'),
+            "state": t('状态'), "expires": t('到期'), "uuid": "UUID",
         }
-        pwidths = {"name": 170, "source": 50, "type": 100, "state": 70, "expires": 90, "uuid": 150}
+        pwidths = {"name": 160, "source": 50, "type": 95, "state": 70, "expires": 110, "uuid": 130}
         self.prof_tree = ttk.Treeview(prof, columns=pcolumns, show="headings", selectmode="extended", height=8)
         for col in pcolumns:
             self.prof_tree.heading(col, text=pheadings[col])
@@ -1863,7 +1917,7 @@ class App(tk.Tk):
         self.prof_tree.tag_configure("warn", foreground="#b26a00")
         self.prof_tree.tag_configure("local", foreground=COLOR_INFO)
 
-        detail = ttk.LabelFrame(bottom, text=" 详情 ", padding=(px(12), px(10)))
+        detail = ttk.LabelFrame(bottom, text=t(' 详情 '), padding=(px(12), px(10)))
         detail.grid(row=0, column=1, sticky="nsew")
         detail.columnconfigure(0, weight=1)
         detail.rowconfigure(0, weight=1)
@@ -1874,9 +1928,9 @@ class App(tk.Tk):
         self.cert_detail.grid(row=0, column=0, sticky="nsew")
         dbar = ttk.Frame(detail)
         dbar.grid(row=1, column=0, sticky="ew", pady=(px(8), 0))
-        ttk.Button(dbar, text="打开所在目录", command=self._cert_reveal_selected).pack(side="left")
-        ttk.Button(dbar, text="复制详情", command=self._cert_copy_detail).pack(side="left", padx=px(8))
-        ttk.Button(dbar, text="备案信息", command=self._filing_from_selected_cert).pack(side="left")
+        ttk.Button(dbar, text=t('打开所在目录'), command=self._cert_reveal_selected).pack(side="left")
+        ttk.Button(dbar, text=t('复制详情'), command=self._cert_copy_detail).pack(side="left", padx=px(8))
+        ttk.Button(dbar, text=t('备案信息'), command=self._filing_from_selected_cert).pack(side="left")
 
         self.cert_status = ttk.Label(tab, text="", foreground=COLOR_MUTED)
         self.cert_status.grid(row=2, column=0, sticky="w", pady=(px(8), 0))
@@ -1887,7 +1941,7 @@ class App(tk.Tk):
         self.profile_view: list[dict] = []
         self.cert_detail_text = ""
         if CRYPTO_ERROR:
-            self._cert_status(f"缺少 cryptography 依赖：{CRYPTO_ERROR}", "err")
+            self._cert_status(t('缺少 cryptography 依赖：{p0}').format(p0=CRYPTO_ERROR), "err")
 
     # ------------------------------------------------------------ 备案页
 
@@ -1897,50 +1951,50 @@ class App(tk.Tk):
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(2, weight=1)
 
-        src = ttk.LabelFrame(tab, text=" 选择文件 ", padding=(px(14), px(12)))
+        src = ttk.LabelFrame(tab, text=t(' 选择文件 '), padding=(px(14), px(12)))
         src.grid(row=0, column=0, sticky="ew")
         src.columnconfigure(3, weight=1)
-        ttk.Button(src, text="选择 IPA…", command=self._filing_pick_ipa).grid(row=0, column=0, sticky="w")
+        ttk.Button(src, text=t('选择 IPA…'), command=self._filing_pick_ipa).grid(row=0, column=0, sticky="w")
         ttk.Button(
-            src, text="选择证书 / 描述文件…", command=self._filing_pick_cert,
+            src, text=t('选择证书 / 描述文件…'), command=self._filing_pick_cert,
         ).grid(row=0, column=1, sticky="w", padx=px(8))
         ttk.Button(
-            src, text="从证书档案带入", command=self._filing_from_selected_cert,
+            src, text=t('从证书档案带入'), command=self._filing_from_selected_cert,
         ).grid(row=0, column=2, sticky="w")
-        self.filing_path = tk.StringVar(value="尚未选择文件")
+        self.filing_path = tk.StringVar(value=t('尚未选择文件'))
         ttk.Label(
             src, textvariable=self.filing_path, style="Hint.TLabel",
         ).grid(row=0, column=3, sticky="w", padx=(px(12), 0))
         ttk.Label(
             src,
-            text="iOS 备案口径：Bundle ID + 证书公钥 + 证书 SHA-1（表单里叫“签名MD5值”）。",
+            text=t('iOS 备案口径：Bundle ID + 证书公钥 + 证书 SHA-1（表单里叫“签名MD5值”）。'),
             style="Hint.TLabel",
         ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(px(8), 0))
 
-        base = ttk.LabelFrame(tab, text=" 基础信息 ", padding=(px(14), px(10)))
+        base = ttk.LabelFrame(tab, text=t(' 基础信息 '), padding=(px(14), px(10)))
         base.grid(row=1, column=0, sticky="ew", pady=(px(12), 0))
         base.columnconfigure(1, weight=1)
         self.filing_vars: dict[str, tk.StringVar] = {}
         rows = [
             ("bundle_id", "Bundle ID"),
-            ("cn", "证书名称"),
-            ("key_algorithm", "公钥算法"),
-            ("serial", "序列号"),
-            ("not_after", "证书有效期"),
-            ("profile", "描述文件"),
+            ("cn", t('证书名称')),
+            ("key_algorithm", t('公钥算法')),
+            ("serial", t('序列号')),
+            ("not_after", t('证书有效期')),
+            ("profile", t('描述文件')),
         ]
         for index, (key, caption) in enumerate(rows):
-            ttk.Label(base, text=caption, width=10).grid(row=index, column=0, sticky="w", pady=px(2))
+            ttk.Label(base, text=caption).grid(row=index, column=0, sticky="w", pady=px(2))
             var = tk.StringVar(value="—")
             self.filing_vars[key] = var
             ttk.Entry(base, textvariable=var, state="readonly").grid(
                 row=index, column=1, sticky="ew", padx=(px(8), px(8)), pady=px(2),
             )
             ttk.Button(
-                base, text="复制", width=6, command=lambda k=key: self._filing_copy_var(k),
+                base, text=t('复制'), width=6, command=lambda k=key: self._filing_copy_var(k),
             ).grid(row=index, column=2, sticky="e", pady=px(2))
 
-        pk = ttk.LabelFrame(tab, text=" 公钥 ", padding=(px(14), px(10)))
+        pk = ttk.LabelFrame(tab, text=t(' 公钥 '), padding=(px(14), px(10)))
         pk.grid(row=2, column=0, sticky="nsew", pady=(px(12), 0))
         pk.columnconfigure(0, weight=1)
         pk.rowconfigure(0, weight=1)
@@ -1952,57 +2006,57 @@ class App(tk.Tk):
         pbar = ttk.Frame(pk)
         pbar.grid(row=1, column=0, sticky="w", pady=(px(8), 0))
         ttk.Button(
-            pbar, text="复制 PEM", command=lambda: self._filing_copy("pubkey_pem", "公钥 PEM"),
+            pbar, text=t('复制 PEM'), command=lambda: self._filing_copy("pubkey_pem", t('公钥 PEM')),
         ).pack(side="left")
         ttk.Button(
-            pbar, text="复制 Base64 单行",
-            command=lambda: self._filing_copy("pubkey_b64", "公钥 Base64"),
+            pbar, text=t('复制 Base64 单行'),
+            command=lambda: self._filing_copy("pubkey_b64", t('公钥 Base64')),
         ).pack(side="left", padx=px(8))
         ttk.Button(
-            pbar, text="复制十六进制",
-            command=lambda: self._filing_copy("pubkey_hex", "公钥十六进制"),
+            pbar, text=t('复制十六进制'),
+            command=lambda: self._filing_copy("pubkey_hex", t('公钥十六进制')),
         ).pack(side="left")
         ttk.Button(
-            pbar, text="复制空格分隔",
-            command=lambda: self._filing_copy("pubkey_hex_spaced", "公钥十六进制（空格）"),
+            pbar, text=t('复制空格分隔'),
+            command=lambda: self._filing_copy("pubkey_hex_spaced", t('公钥十六进制（空格）')),
         ).pack(side="left", padx=px(8))
         ttk.Label(
-            pbar, text="十六进制即 Windows 证书“详细信息→公钥”的格式", style="Hint.TLabel",
+            pbar, text=t('十六进制即 Windows 证书“详细信息→公钥”的格式'), style="Hint.TLabel",
         ).pack(side="left", padx=(px(8), 0))
 
-        sig = ttk.LabelFrame(tab, text=" 签名指纹 ", padding=(px(14), px(10)))
+        sig = ttk.LabelFrame(tab, text=t(' 签名指纹 '), padding=(px(14), px(10)))
         sig.grid(row=3, column=0, sticky="ew", pady=(px(12), 0))
         sig.columnconfigure(1, weight=1)
         self.filing_vars["sha1"] = tk.StringVar(value="—")
         self.filing_vars["sha1_colon"] = tk.StringVar(value="—")
         self.filing_vars["md5"] = tk.StringVar(value="—")
         sig_rows = [
-            ("sha1", "SHA-1（备案填这个）", "SHA-1"),
-            ("sha1_colon", "SHA-1（冒号分隔）", "SHA-1（冒号）"),
-            ("md5", "证书 MD5（参考）", "证书 MD5"),
+            ("sha1", t('SHA-1（备案填这个）'), "SHA-1"),
+            ("sha1_colon", t('SHA-1（冒号分隔）'), t('SHA-1（冒号）')),
+            ("md5", t('证书 MD5（参考）'), t('证书 MD5')),
         ]
         for index, (key, caption, label) in enumerate(sig_rows):
-            ttk.Label(sig, text=caption, width=18).grid(row=index, column=0, sticky="w", pady=px(2))
+            ttk.Label(sig, text=caption).grid(row=index, column=0, sticky="w", pady=px(2))
             ttk.Entry(
                 sig, textvariable=self.filing_vars[key], state="readonly", font=("Consolas", 9),
             ).grid(row=index, column=1, sticky="ew", padx=(px(8), px(8)), pady=px(2))
             ttk.Button(
-                sig, text="复制", width=6,
+                sig, text=t('复制'), width=6,
                 command=lambda k=key, l=label: self._filing_copy(k, l),
             ).grid(row=index, column=2, sticky="e", pady=px(2))
 
         foot = ttk.Frame(tab)
         foot.grid(row=4, column=0, sticky="ew", pady=(px(12), 0))
-        ttk.Button(foot, text="一键复制备案三项", command=self._filing_copy_all).pack(side="left")
+        ttk.Button(foot, text=t('一键复制备案三项'), command=self._filing_copy_all).pack(side="left")
         ttk.Label(
-            foot, text="Bundle ID、公钥、签名 SHA-1 带标签一次复制", style="Hint.TLabel",
+            foot, text=t('Bundle ID、公钥、签名 SHA-1 带标签一次复制'), style="Hint.TLabel",
         ).pack(side="left", padx=(px(12), 0))
         self.filing_status = ttk.Label(foot, text="", foreground=COLOR_MUTED)
         self.filing_status.pack(side="right")
 
         self.filing_info: dict | None = None
         if CRYPTO_ERROR:
-            self._filing_set_status(f"缺少 cryptography 依赖：{CRYPTO_ERROR}", "err")
+            self._filing_set_status(t('缺少 cryptography 依赖：{p0}').format(p0=CRYPTO_ERROR), "err")
 
     def _filing_set_status(self, text: str, color: str = "muted") -> None:
         palette = {"ok": COLOR_OK, "err": COLOR_ERR, "muted": COLOR_MUTED, "info": COLOR_INFO}
@@ -2011,8 +2065,8 @@ class App(tk.Tk):
     def _filing_ready(self) -> bool:
         if CRYPTO_ERROR:
             messagebox.showerror(
-                "缺少依赖",
-                "备案信息解析需要 cryptography 库：\n\npip install cryptography\n\n" + CRYPTO_ERROR,
+                t('缺少依赖'),
+                t('备案信息解析需要 cryptography 库：\n\npip install cryptography\n\n') + CRYPTO_ERROR,
             )
             return False
         return True
@@ -2021,8 +2075,8 @@ class App(tk.Tk):
         if not self._filing_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择 IPA 文件",
-            filetypes=[("iOS 应用包", "*.ipa"), ("所有文件", "*.*")],
+            title=t('选择 IPA 文件'),
+            filetypes=[(t('iOS 应用包'), "*.ipa"), (t('所有文件'), "*.*")],
         )
         if chosen:
             self._filing_load_ipa(chosen)
@@ -2031,10 +2085,10 @@ class App(tk.Tk):
         if not self._filing_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择证书或描述文件",
+            title=t('选择证书或描述文件'),
             filetypes=[
-                ("证书 / 描述文件", "*.cer *.crt *.pem *.mobileprovision *.p12 *.pfx"),
-                ("所有文件", "*.*"),
+                (t('证书 / 描述文件'), "*.cer *.crt *.pem *.mobileprovision *.p12 *.pfx"),
+                (t('所有文件'), "*.*"),
             ],
         )
         if chosen:
@@ -2051,15 +2105,15 @@ class App(tk.Tk):
             if suffix == ".mobileprovision":
                 info = filing_info_from_profile(Path(path).read_bytes(), path)
             elif suffix in (".p12", ".pfx"):
-                password = self._ask_simple_password("读取 P12", "请输入该 P12 的导出密码：")
+                password = self._ask_simple_password(t('读取 P12'), t('请输入该 P12 的导出密码：'))
                 if password is None:
                     return
                 info = filing_info_from_p12(path, password)
             else:
                 info = filing_info_from_cert_file(path)
         except Exception as exc:
-            self._filing_set_status(f"读取失败：{exc}", "err")
-            messagebox.showerror("无法解析", str(exc))
+            self._filing_set_status(t('读取失败：{p0}').format(p0=exc), "err")
+            messagebox.showerror(t('无法解析'), str(exc))
             return
         self._filing_apply(info, path)
 
@@ -2069,8 +2123,8 @@ class App(tk.Tk):
         try:
             info = filing_info_from_ipa(path)
         except Exception as exc:
-            self._filing_set_status(f"读取失败：{exc}", "err")
-            messagebox.showerror("无法解析 IPA", str(exc))
+            self._filing_set_status(t('读取失败：{p0}').format(p0=exc), "err")
+            messagebox.showerror(t('无法解析 IPA'), str(exc))
             return
         self._filing_apply(info, path)
 
@@ -2082,7 +2136,7 @@ class App(tk.Tk):
             part for part in (info.get("profile_name"), info.get("team")) if part
         ) or "—"
         if info.get("cert_count", 1) > 1:
-            profile_text += f"（含 {info['cert_count']} 张证书，已优先取 Distribution）"
+            profile_text += t('（含 {p0} 张证书，已优先取 Distribution）').format(p0=info['cert_count'])
         values = {
             "bundle_id": info.get("bundle_id") or "",
             "cn": cert.get("cn") or "—",
@@ -2101,19 +2155,19 @@ class App(tk.Tk):
         self.filing_pub_text.insert("1.0", cert.get("pubkey_pem") or "")
         self.filing_pub_text.configure(state="disabled")
         if info.get("bundle_id"):
-            self._filing_set_status("解析完成，可点右侧按钮复制", "ok")
+            self._filing_set_status(t('解析完成，可点右侧按钮复制'), "ok")
         else:
-            self._filing_set_status("解析完成；文件不含 Bundle ID，请手动填写", "info")
+            self._filing_set_status(t('解析完成；文件不含 Bundle ID，请手动填写'), "info")
         self.nb.select(self.tab_filing)
 
     def _filing_copy_text(self, text: str, label: str) -> None:
         if not text:
-            self._filing_set_status(f"暂无{label}可复制", "err")
+            self._filing_set_status(t('暂无{p0}可复制').format(p0=label), "err")
             return
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
-        self._filing_set_status(f"已复制{label}", "ok")
+        self._filing_set_status(t('已复制{p0}').format(p0=label), "ok")
 
     def _filing_copy(self, key: str, label: str) -> None:
         cert = (self.filing_info or {}).get("cert") or {}
@@ -2122,27 +2176,25 @@ class App(tk.Tk):
     def _filing_copy_var(self, key: str) -> None:
         text = self.filing_vars[key].get()
         if not text or text == "—":
-            self._filing_set_status("该项为空，无法复制", "err")
+            self._filing_set_status(t('该项为空，无法复制'), "err")
             return
-        self._filing_copy_text(text, "到剪贴板")
+        self._filing_copy_text(text, t('到剪贴板'))
 
     def _filing_copy_all(self) -> None:
         info = self.filing_info
         if not info:
-            self._filing_set_status("请先选择文件完成解析", "err")
+            self._filing_set_status(t('请先选择文件完成解析'), "err")
             return
         cert = info.get("cert") or {}
         text = (
-            f"Bundle ID：{info.get('bundle_id') or ''}\n"
-            f"公钥：{cert.get('pubkey_pem') or ''}\n"
-            f"签名SHA-1：{cert.get('sha1') or ''}\n"
+            t('Bundle ID：{p0}\n公钥：{p1}\n签名SHA-1：{p2}\n').format(p0=info.get('bundle_id') or '', p1=cert.get('pubkey_pem') or '', p2=cert.get('sha1') or '')
         )
-        self._filing_copy_text(text, " Bundle ID、公钥、SHA-1")
+        self._filing_copy_text(text, t(' Bundle ID、公钥、SHA-1'))
 
     def _filing_from_selected_cert(self) -> None:
         entry = self._selected_cert_entry()
         if not entry:
-            messagebox.showinfo("请选择证书", "请先在“证书”页选择一条证书档案，再查看备案信息。")
+            messagebox.showinfo(t('请选择证书'), t('请先在“证书”页选择一条证书档案，再查看备案信息。'))
             return
         cer_path = entry.get("cer_path") or ""
         p12_path = entry.get("p12_path") or ""
@@ -2151,7 +2203,7 @@ class App(tk.Tk):
         elif p12_path and Path(p12_path).is_file():
             self._filing_load_file(p12_path)
         else:
-            messagebox.showinfo("没有证书文件", "该档案没有可读取的 .cer 或 .p12 文件。")
+            messagebox.showinfo(t('没有证书文件'), t('该档案没有可读取的 .cer 或 .p12 文件。'))
 
     def _cert_status(self, text: str, color: str = "muted") -> None:
         palette = {"ok": COLOR_OK, "err": COLOR_ERR, "muted": COLOR_MUTED, "info": COLOR_INFO}
@@ -2160,8 +2212,8 @@ class App(tk.Tk):
     def _cert_ready(self) -> bool:
         if CRYPTO_ERROR:
             messagebox.showerror(
-                "缺少依赖",
-                "证书功能需要 cryptography 库：\n\npip install cryptography\n\n" + CRYPTO_ERROR,
+                t('缺少依赖'),
+                t('证书功能需要 cryptography 库：\n\npip install cryptography\n\n') + CRYPTO_ERROR,
             )
             return False
         return True
@@ -2170,16 +2222,15 @@ class App(tk.Tk):
         problem = self._runtime_problem()
         if problem:
             messagebox.showwarning(
-                "无法连接 Apple",
-                problem + "\n\n请到“设置”页补全 API Key。\n"
-                "也可以走手动流程：在开发者网站申请证书后，用“导入 .cer…”添加档案。",
+                t('无法连接 Apple'),
+                problem + t('\n\n请到“设置”页补全 API Key。\n也可以走手动流程：在开发者网站申请证书后，用“导入 .cer…”添加档案。'),
             )
             return None
         return token_from_config(self.cfg)
 
     def _run_cert_task(self, message: str, func, on_ok) -> None:
         if getattr(self, "cert_busy", False):
-            messagebox.showinfo("请稍候", "上一个证书操作还在进行中。")
+            messagebox.showinfo(t('请稍候'), t('上一个证书操作还在进行中。'))
             return
         self.cert_busy = True
         self._cert_status(message, "muted")
@@ -2212,24 +2263,24 @@ class App(tk.Tk):
                 left_text = "—"
             elif left <= 0:
                 tag = "expired"
-                left_text = "已过期"
+                left_text = t('已过期')
             elif left < 30:
                 tag = "warn"
-                left_text = f"{left} 天"
+                left_text = t('{p0} 天').format(p0=left)
             else:
                 tag = "ok"
-                left_text = f"{left} 天"
+                left_text = t('{p0} 天').format(p0=left)
             has_key_file = bool(entry.get("key_path")) and Path(entry["key_path"]).is_file()
             has_p12 = bool(entry.get("p12_path")) and Path(entry["p12_path"]).is_file()
             has_key = has_key_file or has_p12
             if has_p12:
-                p12_text = "已生成" if has_key_file else "已导入"
+                p12_text = t('已生成') if has_key_file else t('已导入')
             elif has_key and entry.get("cer_path") and Path(entry["cer_path"]).is_file():
-                p12_text = "未生成"
+                p12_text = t('未生成')
             elif has_key:
-                p12_text = "待证书"
+                p12_text = t('待证书')
             else:
-                p12_text = "缺私钥"
+                p12_text = t('缺私钥')
             self.cert_tree.insert(
                 "", "end",
                 values=(
@@ -2237,7 +2288,7 @@ class App(tk.Tk):
                     entry.get("type", ""),
                     entry.get("not_after_text") or not_after,
                     left_text,
-                    ("有" if has_key_file else "P12 内") if has_key else "缺失",
+                    (t('有') if has_key_file else t('P12 内')) if has_key else t('缺失'),
                     p12_text,
                 ),
                 tags=(tag,),
@@ -2246,7 +2297,7 @@ class App(tk.Tk):
             self._fill_profile_tree(self.profile_view)
         if not self.cert_index and not self.cert_status.cget("text"):
             self._cert_status(
-                "还没有证书档案：点“新建证书申请…”开始，或“从 Apple 同步证书”查看已有证书。", "muted",
+                t('还没有证书档案：点“新建证书申请…”开始，或“从 Apple 同步证书”查看已有证书。'), "muted",
             )
 
     def _on_cert_double_click(self, event) -> None:
@@ -2270,8 +2321,8 @@ class App(tk.Tk):
         if not self._cert_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择与该证书配对的私钥",
-            filetypes=[("私钥", "*.key *.pem"), ("所有文件", "*.*")],
+            title=t('选择与该证书配对的私钥'),
+            filetypes=[(t('私钥'), "*.key *.pem"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
@@ -2279,22 +2330,22 @@ class App(tk.Tk):
         try:
             key = serialization.load_pem_private_key(raw, password=None)
         except TypeError:
-            password = self._ask_simple_password("私钥已加密", "请输入该私钥的密码：")
+            password = self._ask_simple_password(t('私钥已加密'), t('请输入该私钥的密码：'))
             if password is None:
                 return
             try:
                 key = serialization.load_pem_private_key(raw, password=password.encode("utf-8"))
             except Exception:
-                messagebox.showerror("无法读取私钥", "密码错误，或该文件不是有效的 PEM 私钥。")
+                messagebox.showerror(t('无法读取私钥'), t('密码错误，或该文件不是有效的 PEM 私钥。'))
                 return
         except Exception:
-            messagebox.showerror("无法读取私钥", "该文件不是有效的 PEM 私钥（.key / .pem）。")
+            messagebox.showerror(t('无法读取私钥'), t('该文件不是有效的 PEM 私钥（.key / .pem）。'))
             return
         cer_path = entry.get("cer_path") or ""
         if cer_path and Path(cer_path).is_file():
             cert = load_certificate_file(cer_path)
             if cert.public_key().public_numbers() != key.public_key().public_numbers():
-                messagebox.showerror("私钥不匹配", "该私钥与档案中的证书不是一对，已拒绝登记。")
+                messagebox.showerror(t('私钥不匹配'), t('该私钥与档案中的证书不是一对，已拒绝登记。'))
                 return
         index = load_cert_index()
         for item in index:
@@ -2304,18 +2355,18 @@ class App(tk.Tk):
         save_cert_index(index)
         self._refresh_cert_archive()
         self._select_cert_entry(entry.get("id", ""))
-        self._cert_status(f"已登记私钥：{chosen}", "ok")
+        self._cert_status(t('已登记私钥：{p0}').format(p0=chosen), "ok")
 
     def _cert_attach_p12(self, entry: dict) -> None:
         if not self._cert_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择已有的 P12 文件",
-            filetypes=[("PKCS#12", "*.p12 *.pfx"), ("所有文件", "*.*")],
+            title=t('选择已有的 P12 文件'),
+            filetypes=[("PKCS#12", "*.p12 *.pfx"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
-        password = self._ask_simple_password("导入 P12", "请输入该 P12 的导出密码：")
+        password = self._ask_simple_password(t('导入 P12'), t('请输入该 P12 的导出密码：'))
         if password is None:
             return
         try:
@@ -2323,22 +2374,20 @@ class App(tk.Tk):
                 Path(chosen).read_bytes(), password.encode("utf-8"),
             )
         except Exception:
-            messagebox.showerror("无法读取 P12", "密码错误，或该文件不是有效的 .p12。")
+            messagebox.showerror(t('无法读取 P12'), t('密码错误，或该文件不是有效的 .p12。'))
             return
         if cert is None or key is None:
-            messagebox.showerror("P12 内容不完整", "该 P12 里没有同时包含证书和私钥。")
+            messagebox.showerror(t('P12 内容不完整'), t('该 P12 里没有同时包含证书和私钥。'))
             return
         if cert.public_key().public_numbers() != key.public_key().public_numbers():
-            messagebox.showerror("P12 内容异常", "P12 中的证书与私钥不匹配。")
+            messagebox.showerror(t('P12 内容异常'), t('P12 中的证书与私钥不匹配。'))
             return
         info = describe_certificate(cert)
         serial = str(entry.get("serial") or "").upper()
         if serial and serial != info["serial"].upper():
             messagebox.showerror(
-                "证书不一致",
-                f"该 P12 里的证书序列号是 {info['serial'][:16]}…，\n"
-                f"与当前档案的 {serial[:16]}… 不同。\n\n"
-                "请双击对应证书那一行的 P12 列。",
+                t('证书不一致'),
+                t('该 P12 里的证书序列号是 {p0}…，\n与当前档案的 {p1}… 不同。\n\n请双击对应证书那一行的 P12 列。').format(p0=info['serial'][:16], p1=serial[:16]),
             )
             return
         index = load_cert_index()
@@ -2360,7 +2409,7 @@ class App(tk.Tk):
         save_cert_index(index)
         self._refresh_cert_archive()
         self._select_cert_entry(entry.get("id", ""))
-        self._cert_status(f"已登记 P12：{chosen}", "ok")
+        self._cert_status(t('已登记 P12：{p0}').format(p0=chosen), "ok")
 
     def _ask_simple_password(self, title: str, prompt: str) -> str | None:
         px = self.px
@@ -2384,8 +2433,8 @@ class App(tk.Tk):
 
         buttons = ttk.Frame(body)
         buttons.grid(row=2, column=0, sticky="e")
-        ttk.Button(buttons, text="确定", command=confirm).pack(side="left")
-        ttk.Button(buttons, text="取消", command=win.destroy).pack(side="left", padx=px(8))
+        ttk.Button(buttons, text=t('确定'), command=confirm).pack(side="left")
+        ttk.Button(buttons, text=t('取消'), command=win.destroy).pack(side="left", padx=px(8))
         win.bind("<Return>", lambda _event: confirm())
         self.wait_window(win)
         return result["value"]
@@ -2407,20 +2456,20 @@ class App(tk.Tk):
         if entry.get("not_after"):
             try:
                 left = days_left(datetime.fromisoformat(entry["not_after"]))
-                left_text = f"（剩余 {left} 天）" if left > 0 else "（已过期）"
+                left_text = t('（剩余 {p0} 天）').format(p0=left) if left > 0 else t('（已过期）')
             except ValueError:
                 left_text = ""
         lines = [
-            f"名称：{entry.get('name', '')}",
-            f"类型：{entry.get('type') or entry.get('cert_type', '')}",
-            f"通用名称：{entry.get('cn') or '—'}",
-            f"序列号：{entry.get('serial') or '—'}",
-            f"有效期：{entry.get('not_after_text') or '—'}{left_text}",
-            f"来源：{'Apple 同步' if entry.get('source') == 'apple' else '本工具申请/导入'}",
+            t('名称：{p0}').format(p0=entry.get('name', '')),
+            t('类型：{p0}').format(p0=entry.get('type') or entry.get('cert_type', '')),
+            t('通用名称：{p0}').format(p0=entry.get('cn') or '—'),
+            t('序列号：{p0}').format(p0=entry.get('serial') or '—'),
+            t('有效期：{p0}{p1}').format(p0=entry.get('not_after_text') or '—', p1=left_text),
+            t('来源：{p0}').format(p0=t('Apple 同步') if entry.get('source') == 'apple' else t('本工具申请/导入')),
             "",
-            "文件：",
+            t('文件：'),
         ]
-        for label, key in (("私钥", "key_path"), ("CSR", "csr_path"), ("证书", "cer_path"), ("P12", "p12_path")):
+        for label, key in ((t('私钥'), "key_path"), ("CSR", "csr_path"), (t('证书'), "cer_path"), ("P12", "p12_path")):
             path = entry.get(key) or ""
             if (
                 key == "key_path"
@@ -2428,15 +2477,15 @@ class App(tk.Tk):
                 and entry.get("p12_path")
                 and Path(entry["p12_path"]).is_file()
             ):
-                lines.append(f"  {label}：在 P12 内（导入时已验证）")
+                lines.append(t('  {p0}：在 P12 内（导入时已验证）').format(p0=label))
                 continue
-            state = "存在" if path and Path(path).is_file() else "缺失"
-            lines.append(f"  {label}：{path or '—'}（{state}）")
+            state = t('存在') if path and Path(path).is_file() else t('缺失')
+            lines.append(t('  {p0}：{p1}（{p2}）').format(p0=label, p1=path or '—', p2=state))
         profiles = entry.get("profiles") or []
         lines.append("")
-        lines.append(f"关联描述文件：{len(profiles)} 个")
+        lines.append(t('关联描述文件：{p0} 个').format(p0=len(profiles)))
         for item in profiles:
-            lines.append(f"  · {item.get('name')}（{item.get('type')}，{item.get('expires_text')}）")
+            lines.append(t('  · {p0}（{p1}，{p2}）').format(p0=item.get('name'), p1=item.get('type'), p2=item.get('expires_text')))
             lines.append(f"    {item.get('path')}")
         text = "\n".join(lines)
         self.cert_detail_text = text
@@ -2463,7 +2512,7 @@ class App(tk.Tk):
             return
         self.clipboard_clear()
         self.clipboard_append(self.cert_detail_text)
-        self._cert_status("详情已复制到剪贴板", "ok")
+        self._cert_status(t('详情已复制到剪贴板'), "ok")
 
     def _cert_open_dir(self) -> None:
         CERT_DIR.mkdir(parents=True, exist_ok=True)
@@ -2522,32 +2571,32 @@ class App(tk.Tk):
         def done(result) -> None:
             added, total = result
             self._refresh_cert_archive()
-            self._cert_status(f"已同步 {total} 张证书（新增档案 {added}）", "ok")
+            self._cert_status(t('已同步 {p0} 张证书（新增档案 {p1}）').format(p0=total, p1=added), "ok")
 
-        self._run_cert_task("正在从 Apple 同步证书…", task, done)
+        self._run_cert_task(t('正在从 Apple 同步证书…'), task, done)
 
     def _cert_import_cer(self) -> None:
         if not self._cert_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择 Apple 签发的证书",
-            filetypes=[("证书", "*.cer *.crt *.pem"), ("所有文件", "*.*")],
+            title=t('选择 Apple 签发的证书'),
+            filetypes=[(t('证书'), "*.cer *.crt *.pem"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
         try:
             info = describe_certificate(load_certificate_file(chosen))
         except Exception as exc:
-            messagebox.showerror("无法读取证书", f"{exc}\n\n请确认选择的是 Apple 签发的 .cer 文件。")
+            messagebox.showerror(t('无法读取证书'), t('{p0}\n\n请确认选择的是 Apple 签发的 .cer 文件。').format(p0=exc))
             return
         target = filedialog.askopenfilename(
-            title="选择与该证书配对的私钥（.key），可取消",
-            filetypes=[("私钥", "*.key *.pem"), ("所有文件", "*.*")],
+            title=t('选择与该证书配对的私钥（.key），可取消'),
+            filetypes=[(t('私钥'), "*.key *.pem"), (t('所有文件'), "*.*")],
         )
         entry = {
             "id": uuid.uuid4().hex,
             "name": info["cn"] or Path(chosen).stem,
-            "type": "导入证书",
+            "type": t('导入证书'),
             "cn": info["cn"],
             "serial": info["serial"],
             "not_after": info["not_after"].isoformat(),
@@ -2563,7 +2612,7 @@ class App(tk.Tk):
         index.append(entry)
         save_cert_index(index)
         self._refresh_cert_archive()
-        self._cert_status(f"已导入 {entry['name']}，可继续合成 P12", "ok")
+        self._cert_status(t('已导入 {p0}，可继续合成 P12').format(p0=entry['name']), "ok")
         self._select_cert_entry(entry["id"])
 
     def _select_cert_entry(self, entry_id: str) -> None:
@@ -2580,17 +2629,17 @@ class App(tk.Tk):
             return
         entry = self._selected_cert_entry()
         if not entry:
-            messagebox.showinfo("未选择证书", "请先在证书档案中选择一条记录。")
+            messagebox.showinfo(t('未选择证书'), t('请先在证书档案中选择一条记录。'))
             return
         cer_path = entry.get("cer_path") or ""
         if not cer_path or not Path(cer_path).is_file():
-            messagebox.showwarning("缺少证书文件", "这条档案没有可用的 .cer 文件，请先通过向导申请或导入证书。")
+            messagebox.showwarning(t('缺少证书文件'), t('这条档案没有可用的 .cer 文件，请先通过向导申请或导入证书。'))
             return
         key_path = entry.get("key_path") or ""
         if not key_path or not Path(key_path).is_file():
             key_path = filedialog.askopenfilename(
-                title="选择与该证书配对的私钥（.key）",
-                filetypes=[("私钥", "*.key *.pem"), ("所有文件", "*.*")],
+                title=t('选择与该证书配对的私钥（.key）'),
+                filetypes=[(t('私钥'), "*.key *.pem"), (t('所有文件'), "*.*")],
             )
             if not key_path:
                 return
@@ -2600,7 +2649,7 @@ class App(tk.Tk):
             return
         default_name = Path(cer_path).stem + ".p12"
         target = filedialog.asksaveasfilename(
-            title="保存 P12",
+            title=t('保存 P12'),
             initialdir=str(Path(cer_path).parent),
             initialfile=default_name,
             defaultextension=".p12",
@@ -2609,9 +2658,8 @@ class App(tk.Tk):
         if not target:
             return
         include_chain = messagebox.askyesno(
-            "证书链",
-            "是否附带 Apple 中间证书（推荐）？\n\n"
-            "附带后部分工具导入更省事；下载失败会自动跳过，不影响 P12 生成。",
+            t('证书链'),
+            t('是否附带 Apple 中间证书（推荐）？\n\n附带后部分工具导入更省事；下载失败会自动跳过，不影响 P12 生成。'),
         )
 
         def task():
@@ -2629,23 +2677,22 @@ class App(tk.Tk):
             save_cert_index(index)
             self._refresh_cert_archive()
             self._select_cert_entry(entry["id"])
-            self._cert_status(f"P12 已生成：{target}", "ok")
+            self._cert_status(t('P12 已生成：{p0}').format(p0=target), "ok")
             messagebox.showinfo(
-                "P12 已生成",
-                f"{target}\n\n大小 {human_size(info['size'])}，附带中间证书 {len(chain)} 张。\n"
-                "在 HBuilderX 云打包的 iOS 签名里选择该文件并输入密码。",
+                t('P12 已生成'),
+                t('{p0}\n\n大小 {p1}，附带中间证书 {p2} 张。\n在 HBuilderX 云打包的 iOS 签名里选择该文件并输入密码。').format(p0=target, p1=human_size(info['size']), p2=len(chain)),
             )
 
-        self._run_cert_task("正在生成 P12…", task, done)
+        self._run_cert_task(t('正在生成 P12…'), task, done)
 
     def _cert_delete_entry(self) -> None:
         entry = self._selected_cert_entry()
         if not entry:
-            messagebox.showinfo("未选择证书", "请先在证书档案中选择一条记录。")
+            messagebox.showinfo(t('未选择证书'), t('请先在证书档案中选择一条记录。'))
             return
         if not messagebox.askyesno(
-            "移除档案",
-            f"从档案列表移除「{entry.get('name', '')}」？\n\n只移除记录，私钥/证书/P12 文件都会保留。",
+            t('移除档案'),
+            t('从档案列表移除「{p0}」？\n\n只移除记录，私钥/证书/P12 文件都会保留。').format(p0=entry.get('name', '')),
         ):
             return
         index = [item for item in load_cert_index() if item.get("id") != entry.get("id")]
@@ -2655,40 +2702,40 @@ class App(tk.Tk):
         self.cert_detail.delete("1.0", "end")
         self.cert_detail.configure(state="disabled")
         self.cert_detail_text = ""
-        self._cert_status("已移除档案记录", "muted")
+        self._cert_status(t('已移除档案记录'), "muted")
 
     def _ask_p12_password(self) -> str | None:
         px = self.px
         win = tk.Toplevel(self)
-        win.title("设置 P12 密码")
+        win.title(t('设置 P12 密码'))
         win.transient(self)
         win.grab_set()
         win.resizable(False, False)
         body = ttk.Frame(win, padding=px(18))
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="P12 密码（导入 HBuilderX 时需要，请自行记牢）：").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, text=t('P12 密码（导入 HBuilderX 时需要，请自行记牢）：')).grid(row=0, column=0, columnspan=2, sticky="w")
         first = tk.StringVar()
         second = tk.StringVar()
         ttk.Entry(body, textvariable=first, show="*", width=32).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(px(8), px(10)))
-        ttk.Label(body, text="再次输入：").grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, text=t('再次输入：')).grid(row=2, column=0, columnspan=2, sticky="w")
         ttk.Entry(body, textvariable=second, show="*", width=32).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(px(8), px(12)))
         result = {"value": None}
 
         def confirm() -> None:
             value = first.get()
             if len(value) < 6:
-                messagebox.showwarning("密码太短", "P12 密码至少 6 位。", parent=win)
+                messagebox.showwarning(t('密码太短'), t('P12 密码至少 6 位。'), parent=win)
                 return
             if value != second.get():
-                messagebox.showwarning("两次输入不一致", "请重新确认密码。", parent=win)
+                messagebox.showwarning(t('两次输入不一致'), t('请重新确认密码。'), parent=win)
                 return
             result["value"] = value
             win.destroy()
 
         buttons = ttk.Frame(body)
         buttons.grid(row=4, column=0, columnspan=2, sticky="e")
-        ttk.Button(buttons, text="确定", command=confirm).pack(side="left")
-        ttk.Button(buttons, text="取消", command=win.destroy).pack(side="left", padx=px(8))
+        ttk.Button(buttons, text=t('确定'), command=confirm).pack(side="left")
+        ttk.Button(buttons, text=t('取消'), command=win.destroy).pack(side="left", padx=px(8))
         win.bind("<Return>", lambda _event: confirm())
         self.wait_window(win)
         return result["value"]
@@ -2716,7 +2763,7 @@ class App(tk.Tk):
                 "", "end",
                 values=(
                     item.get("name", ""),
-                    item.get("source", "Apple"),
+                    t(item.get("source", "Apple")),
                     profile_type_label(item.get("type", "")),
                     item.get("state") or "—",
                     item.get("expires_text") or fmt_when(expires) if expires else "—",
@@ -2787,16 +2834,16 @@ class App(tk.Tk):
             for item in merged:
                 item.setdefault("source", "Apple")
             self._fill_profile_tree(merged)
-            self._cert_status(f"已读取 {len(items)} 个 Apple 描述文件，本地文件 {len(local)} 个", "ok")
+            self._cert_status(t('已读取 {p0} 个 Apple 描述文件，本地文件 {p1} 个').format(p0=len(items), p1=len(local)), "ok")
 
-        self._run_cert_task("正在读取描述文件列表…", task, done)
+        self._run_cert_task(t('正在读取描述文件列表…'), task, done)
 
     def _cert_download_profiles(self) -> None:
         if not self._cert_ready():
             return
         selection = self.prof_tree.selection()
         if not selection:
-            messagebox.showinfo("未选择描述文件", "请先在列表中选择要下载的描述文件。")
+            messagebox.showinfo(t('未选择描述文件'), t('请先在列表中选择要下载的描述文件。'))
             return
         picked = []
         for row in selection:
@@ -2805,7 +2852,7 @@ class App(tk.Tk):
                 picked.append(self.profile_view[index])
         remote = [item for item in picked if item.get("source", "Apple") != "本地" and item.get("id")]
         if not remote:
-            messagebox.showinfo("无需下载", "选中的都是本地文件，已在描述文件目录中。")
+            messagebox.showinfo(t('无需下载'), t('选中的都是本地文件，已在描述文件目录中。'))
             return
         token = self._cert_api_token()
         if not token:
@@ -2817,32 +2864,31 @@ class App(tk.Tk):
         def done(items) -> None:
             linked = sum(self._link_profile_to_archives(item) for item in items)
             self._cert_status(
-                f"已下载 {len(items)} 个描述文件到 {PROFILE_DIR}" + (f"，关联 {linked} 个证书档案" if linked else ""),
+                t('已下载 {p0} 个描述文件到 {p1}').format(p0=len(items), p1=PROFILE_DIR) + (t('，关联 {p0} 个证书档案').format(p0=linked) if linked else ""),
                 "ok",
             )
             local = self._scan_local_profiles()
             self._fill_profile_tree(local)
             messagebox.showinfo(
-                "下载完成",
-                f"已保存到：\n{PROFILE_DIR}\n\n"
-                "在 HBuilderX 云打包的 iOS 描述文件里选择对应 .mobileprovision。",
+                t('下载完成'),
+                t('已保存到：\n{p0}\n\n在 HBuilderX 云打包的 iOS 描述文件里选择对应 .mobileprovision。').format(p0=PROFILE_DIR),
             )
 
-        self._run_cert_task("正在下载描述文件…", task, done)
+        self._run_cert_task(t('正在下载描述文件…'), task, done)
 
     def _cert_import_profile(self) -> None:
         if not self._cert_ready():
             return
         chosen = filedialog.askopenfilename(
-            title="选择 .mobileprovision 文件",
-            filetypes=[("描述文件", "*.mobileprovision"), ("所有文件", "*.*")],
+            title=t('选择 .mobileprovision 文件'),
+            filetypes=[(t('描述文件'), "*.mobileprovision"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
         try:
             info = parse_mobileprovision(chosen)
         except Exception as exc:
-            messagebox.showerror("无法解析描述文件", str(exc))
+            messagebox.showerror(t('无法解析描述文件'), str(exc))
             return
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         safe_name = re.sub(r"[^\w.\-]+", "_", info.get("name") or Path(chosen).stem)
@@ -2855,7 +2901,7 @@ class App(tk.Tk):
         local = self._scan_local_profiles()
         self._fill_profile_tree(local)
         self._cert_status(
-            f"已导入 {info['name']}（{info['type']}，{info['expires_text']} 到期）", "ok",
+            t('已导入 {p0}（{p1}，{p2} 到期）').format(p0=info['name'], p1=info['type'], p2=info['expires_text']), "ok",
         )
 
     def _cert_create_profile_dialog(self) -> None:
@@ -2866,7 +2912,7 @@ class App(tk.Tk):
             return
         px = self.px
         win = tk.Toplevel(self)
-        win.title("新建描述文件")
+        win.title(t('新建描述文件'))
         win.transient(self)
         win.grab_set()
         win.resizable(False, False)
@@ -2874,13 +2920,13 @@ class App(tk.Tk):
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
 
-        ttk.Label(body, text="通过 App Store Connect API 创建，创建后自动下载到本地。").grid(
+        ttk.Label(body, text=t('通过 App Store Connect API 创建，创建后自动下载到本地。')).grid(
             row=0, column=0, sticky="w",
         )
-        status = ttk.Label(body, text="正在读取 Apple 数据…", foreground=COLOR_MUTED)
+        status = ttk.Label(body, text=t('正在读取 Apple 数据…'), foreground=COLOR_MUTED)
         status.grid(row=1, column=0, sticky="w", pady=(px(6), px(10)))
 
-        ttk.Label(body, text="名称").grid(row=2, column=0, sticky="w")
+        ttk.Label(body, text=t('名称')).grid(row=2, column=0, sticky="w")
         name_var = tk.StringVar()
         ttk.Entry(body, textvariable=name_var).grid(row=3, column=0, sticky="ew", pady=(px(4), px(10)))
 
@@ -2889,7 +2935,7 @@ class App(tk.Tk):
         bundle_box = ttk.Combobox(body, textvariable=bundle_var, state="readonly", width=52)
         bundle_box.grid(row=5, column=0, sticky="ew", pady=(px(4), px(10)))
 
-        ttk.Label(body, text="类型").grid(row=6, column=0, sticky="w")
+        ttk.Label(body, text=t('类型')).grid(row=6, column=0, sticky="w")
         type_var = tk.StringVar(value=PROFILE_TYPE_CHOICES[0][0])
         ttk.Combobox(
             body, textvariable=type_var,
@@ -2900,8 +2946,8 @@ class App(tk.Tk):
         lists.grid(row=8, column=0, sticky="ew")
         lists.columnconfigure(0, weight=1)
         lists.columnconfigure(1, weight=1)
-        ttk.Label(lists, text="选择证书（可多选）").grid(row=0, column=0, sticky="w")
-        ttk.Label(lists, text="选择设备（Ad Hoc / Development）").grid(row=0, column=1, sticky="w", padx=(px(10), 0))
+        ttk.Label(lists, text=t('选择证书（可多选）')).grid(row=0, column=0, sticky="w")
+        ttk.Label(lists, text=t('选择设备（Ad Hoc / Development）')).grid(row=0, column=1, sticky="w", padx=(px(10), 0))
         cert_list = tk.Listbox(lists, selectmode="extended", height=7, exportselection=False)
         cert_list.grid(row=1, column=0, sticky="ew", pady=(px(4), 0))
         device_list = tk.Listbox(lists, selectmode="extended", height=7, exportselection=False)
@@ -2911,7 +2957,9 @@ class App(tk.Tk):
 
         def apply_data() -> None:
             bundles = data["bundles"]
-            bundle_box["values"] = [f"{item['identifier']}（{item['name']}）" for item in bundles]
+            bundle_box["values"] = [
+                t('{p0}（{p1}）').format(p0=item['identifier'], p1=item['name']) for item in bundles
+            ]
             if bundles:
                 bundle_box.current(0)
                 name_var.set(f"{bundles[0]['identifier']} App Store")
@@ -2922,7 +2970,7 @@ class App(tk.Tk):
             for item in data["devices"]:
                 device_list.insert("end", f"{item['name']} · {item['udid']}")
             status.configure(
-                text=f"已读取 {len(bundles)} 个 Bundle ID、{len(data['certs'])} 张证书、{len(data['devices'])} 台设备",
+                text=t('已读取 {p0} 个 Bundle ID、{p1} 张证书、{p2} 台设备').format(p0=len(bundles), p1=len(data['certs']), p2=len(data['devices'])),
                 foreground=COLOR_OK,
             )
 
@@ -2936,7 +2984,7 @@ class App(tk.Tk):
                 ]
                 data["devices"] = list_remote_devices(token)
             except Exception as exc:
-                self.events.put(("cert_ui", lambda: status.configure(text=f"读取失败：{exc}", foreground=COLOR_ERR)))
+                self.events.put(("cert_ui", lambda: status.configure(text=t('读取失败：{p0}').format(p0=exc), foreground=COLOR_ERR)))
                 return
             self.events.put(("cert_ui", apply_data))
 
@@ -2944,15 +2992,15 @@ class App(tk.Tk):
 
         def create() -> None:
             if bundle_box.current() < 0:
-                messagebox.showwarning("缺少参数", "请选择 Bundle ID。", parent=win)
+                messagebox.showwarning(t('缺少参数'), t('请选择 Bundle ID。'), parent=win)
                 return
             name = name_var.get().strip()
             if not name:
-                messagebox.showwarning("缺少参数", "请填写描述文件名称。", parent=win)
+                messagebox.showwarning(t('缺少参数'), t('请填写描述文件名称。'), parent=win)
                 return
             cert_ids = [data["certs"][index]["id"] for index in cert_list.curselection()]
             if not cert_ids:
-                messagebox.showwarning("缺少参数", "请至少选择一张证书。", parent=win)
+                messagebox.showwarning(t('缺少参数'), t('请至少选择一张证书。'), parent=win)
                 return
             profile_label = type_var.get()
             profile_code = dict(PROFILE_TYPE_CHOICES)[profile_label]
@@ -2960,11 +3008,11 @@ class App(tk.Tk):
             if profile_code in ("IOS_APP_ADHOC", "IOS_APP_DEVELOPMENT"):
                 device_ids = [data["devices"][index]["id"] for index in device_list.curselection()]
                 if not device_ids:
-                    messagebox.showwarning("缺少参数", "Ad Hoc / Development 描述文件需要选择设备。", parent=win)
+                    messagebox.showwarning(t('缺少参数'), t('Ad Hoc / Development 描述文件需要选择设备。'), parent=win)
                     return
             if not messagebox.askyesno(
-                "创建描述文件",
-                f"将在 Apple 上创建「{name}」（{profile_label}）并下载到本地。\n确定继续吗？",
+                t('创建描述文件'),
+                t('将在 Apple 上创建「{p0}」（{p1}）并下载到本地。\n确定继续吗？').format(p0=name, p1=profile_label),
                 parent=win,
             ):
                 return
@@ -2973,24 +3021,23 @@ class App(tk.Tk):
 
             def done(info) -> None:
                 self._link_profile_to_archives(info)
-                self._cert_status(f"描述文件已创建：{info.get('path', '')}", "ok")
+                self._cert_status(t('描述文件已创建：{p0}').format(p0=info.get('path', '')), "ok")
                 self._fill_profile_tree(self._scan_local_profiles())
                 messagebox.showinfo(
-                    "描述文件已创建",
-                    f"{info.get('name', '')}\n{info.get('type', '')} · {info.get('expires_text', '')} 到期\n\n"
-                    f"{info.get('path', '')}",
+                    t('描述文件已创建'),
+                    t('{p0}\n{p1} · {p2} 到期\n\n{p3}').format(p0=info.get('name', ''), p1=info.get('type', ''), p2=info.get('expires_text', ''), p3=info.get('path', '')),
                 )
 
             self._run_cert_task(
-                "正在创建描述文件…",
+                t('正在创建描述文件…'),
                 lambda: create_remote_profile(token, name, profile_code, bundle_id, cert_ids, device_ids),
                 done,
             )
 
         buttons = ttk.Frame(body)
         buttons.grid(row=9, column=0, sticky="e", pady=(px(14), 0))
-        ttk.Button(buttons, text="创建", command=create).pack(side="left")
-        ttk.Button(buttons, text="关闭", command=win.destroy).pack(side="left", padx=px(8))
+        ttk.Button(buttons, text=t('创建'), command=create).pack(side="left")
+        ttk.Button(buttons, text=t('关闭'), command=win.destroy).pack(side="left", padx=px(8))
 
     def _open_cert_wizard(self) -> None:
         if not self._cert_ready():
@@ -3040,9 +3087,9 @@ class App(tk.Tk):
             return
         initial = self.cfg.get("default_ipa_dir") or str(Path.home() / "Downloads")
         chosen = filedialog.askopenfilename(
-            title="选择 IPA 文件",
+            title=t('选择 IPA 文件'),
             initialdir=initial if Path(initial).exists() else str(Path.home()),
-            filetypes=[("iOS 应用包", "*.ipa"), ("所有文件", "*.*")],
+            filetypes=[(t('iOS 应用包'), "*.ipa"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
@@ -3051,7 +3098,7 @@ class App(tk.Tk):
         self.lbl_ipa.configure(text=chosen)
         for var in self.info_vars.values():
             var.set("—")
-        self._status("正在解析安装包…", "muted")
+        self._status(t('正在解析安装包…'), "muted")
         threading.Thread(target=self._inspect_worker, args=(chosen,), daemon=True).start()
 
     def _inspect_worker(self, path: str) -> None:
@@ -3064,30 +3111,30 @@ class App(tk.Tk):
         self.info_vars["build"].set(info["build"] or "—")
         self.info_vars["size"].set(human_size(info["size"]) if info["size"] else "—")
         if info["error"]:
-            self._status("安装包解析失败：" + info["error"], "err")
+            self._status(t('安装包解析失败：') + info["error"], "err")
         else:
-            self._status(f"已选择 {info['name']}，可以开始上传", "muted")
+            self._status(t('已选择 {p0}，可以开始上传').format(p0=info['name']), "muted")
 
     # ------------------------------------------------------------ 上传
 
     def _runtime_problem(self) -> str:
         cfg = self.cfg
         if not cfg.get("api_key_id") or not cfg.get("api_issuer"):
-            return "API Key ID 或 Issuer ID 未填写"
+            return t('API Key ID 或 Issuer ID 未填写')
         if not Path(cfg.get("api_key_path", "")).is_file():
-            return ".p8 私钥文件不存在"
+            return t('.p8 私钥文件不存在')
         return ""
 
     def start_upload(self) -> None:
         if self.uploading:
             return
         if not self.current_ipa or not Path(self.current_ipa).is_file():
-            messagebox.showwarning("请选择文件", "请先选择一个 .ipa 文件。")
+            messagebox.showwarning(t('请选择文件'), t('请先选择一个 .ipa 文件。'))
             return
 
         problem = self._runtime_problem()
         if problem:
-            messagebox.showwarning("配置不完整", problem + "\n\n请到“设置”页补全并保存。")
+            messagebox.showwarning(t('配置不完整'), problem + t('\n\n请到“设置”页补全并保存。'))
             self.nb.select(self.tab_settings)
             return
 
@@ -3097,16 +3144,15 @@ class App(tk.Tk):
             self.current_info = info
             if not (info.get("version") and info.get("build")):
                 messagebox.showerror(
-                    "无法读取安装包信息",
-                    "未能从 IPA 中解析出版本号和构建号。\n"
-                    "Windows 上传必须提供这两项，请确认 IPA 文件完整后重试。",
+                    t('无法读取安装包信息'),
+                    t('未能从 IPA 中解析出版本号和构建号。\nWindows 上传必须提供这两项，请确认 IPA 文件完整后重试。'),
                 )
                 return
 
         try:
             key_path = str(self._store_api_key(self.cfg))
         except Exception as exc:
-            messagebox.showerror("准备失败", str(exc))
+            messagebox.showerror(t('准备失败'), str(exc))
             return
         command_text = (
             "App Store Connect API · Build Upload · Key "
@@ -3127,7 +3173,7 @@ class App(tk.Tk):
         self.btn_upload.configure(state="disabled")
         self.btn_cancel.configure(state="normal")
         self.btn_pick.configure(state="disabled")
-        self._status("正在连接 App Store Connect…", "muted")
+        self._status(t('正在连接 App Store Connect…'), "muted")
         self._log_line(f"$ {command_text}")
         self._log_line("")
 
@@ -3166,7 +3212,7 @@ class App(tk.Tk):
                 def set_progress(value: float | None) -> None:
                     self.events.put(("progress", value))
 
-                emit(f"使用 App Store Connect API 上传：{Path(ipa_path).name}")
+                emit(t('使用 App Store Connect API 上传：{p0}').format(p0=Path(ipa_path).name))
                 upload_build_via_api(
                     ipa_path=ipa_path,
                     info=info,
@@ -3178,7 +3224,7 @@ class App(tk.Tk):
                 )
                 return_code = 0
         except UploadCanceled:
-            self.events.put(("line", "已取消本次上传。"))
+            self.events.put(("line", t('已取消本次上传。')))
             return_code = -2
         except Exception as exc:
             self.events.put(("line", f"ERROR: {exc}"))
@@ -3217,28 +3263,27 @@ class App(tk.Tk):
 
         if success:
             self._set_progress(100)
-            self._status(f"上传成功（{human_duration(duration)}），Apple 已接收构建", "ok")
+            self._status(t('上传成功（{p0}），Apple 已接收构建').format(p0=human_duration(duration)), "ok")
             self._log_line("")
-            self._log_line("上传成功。App Store Connect 正在处理构建，可在 TestFlight 查看进度。")
+            self._log_line(t('上传成功。App Store Connect 正在处理构建，可在 TestFlight 查看进度。'))
             messagebox.showinfo(
-                "上传成功",
-                f"{record['ipa_name']} 已上传并通过 Apple 校验。\n\n"
-                "构建处理通常需要 5–30 分钟，处理完成后即可在 TestFlight 中分发。",
+                t('上传成功'),
+                t('{p0} 已上传并通过 Apple 校验。\n\n构建处理通常需要 5–30 分钟，处理完成后即可在 TestFlight 中分发。').format(p0=record['ipa_name']),
             )
         elif canceled:
             self._set_progress(0)
-            self._status("已取消本次上传", "muted")
+            self._status(t('已取消本次上传'), "muted")
             self._log_line("")
-            self._log_line("用户取消了本次上传。")
+            self._log_line(t('用户取消了本次上传。'))
         else:
             self._set_progress(0)
-            detail = self.last_error_line or f"退出码 {return_code}"
-            self._status(f"上传失败：{detail}", "err")
+            detail = self.last_error_line or t('退出码 {p0}').format(p0=return_code)
+            self._status(t('上传失败：{p0}').format(p0=detail), "err")
             self._log_line("")
-            self._log_line(f"上传失败（退出码 {return_code}）。")
+            self._log_line(t('上传失败（退出码 {p0}）。').format(p0=return_code))
             messagebox.showerror(
-                "上传失败",
-                f"{detail}\n\n完整输出已保存到日志，可在历史记录中右键“查看日志”。",
+                t('上传失败'),
+                t('{p0}\n\n完整输出已保存到日志，可在历史记录中右键“查看日志”。').format(p0=detail),
             )
 
         self.history.append(record)
@@ -3248,10 +3293,10 @@ class App(tk.Tk):
     def cancel_upload(self) -> None:
         if not self.uploading:
             return
-        if not messagebox.askyesno("取消上传", "确定要中断本次上传吗？"):
+        if not messagebox.askyesno(t('取消上传'), t('确定要中断本次上传吗？')):
             return
         self.cancel_requested = True
-        self._status("正在取消…", "muted")
+        self._status(t('正在取消…'), "muted")
 
     # ------------------------------------------------------------ 历史
 
@@ -3271,7 +3316,7 @@ class App(tk.Tk):
                     record.get("ipa_name", ""),
                     version_text,
                     human_size(record.get("size") or 0),
-                    record.get("status", ""),
+                    t(record.get("status", "")),
                     human_duration(record.get("duration") or 0),
                 ),
                 tags=(tag,),
@@ -3289,44 +3334,44 @@ class App(tk.Tk):
     def open_selected_log(self) -> None:
         record = self._selected_record()
         if not record:
-            messagebox.showinfo("未选择记录", "请先在历史记录中选择一条。")
+            messagebox.showinfo(t('未选择记录'), t('请先在历史记录中选择一条。'))
             return
         log_path = Path(record.get("log", ""))
         if not log_path.is_file():
-            messagebox.showwarning("日志不存在", f"日志文件已不存在：\n{log_path}")
+            messagebox.showwarning(t('日志不存在'), t('日志文件已不存在：\n{p0}').format(p0=log_path))
             return
         try:
             os.startfile(str(log_path))
         except Exception as exc:
-            messagebox.showerror("打开失败", str(exc))
+            messagebox.showerror(t('打开失败'), str(exc))
 
     def reveal_selected_log(self) -> None:
         record = self._selected_record()
         if not record:
-            messagebox.showinfo("未选择记录", "请先在历史记录中选择一条。")
+            messagebox.showinfo(t('未选择记录'), t('请先在历史记录中选择一条。'))
             return
         log_path = Path(record.get("log", ""))
         target = log_path if log_path.exists() else Path(record.get("ipa_path", ""))
         if not target.exists():
-            messagebox.showwarning("路径不存在", str(target))
+            messagebox.showwarning(t('路径不存在'), str(target))
             return
         subprocess.Popen(f'explorer /select,"{target}"')
 
     def copy_selected_command(self) -> None:
         record = self._selected_record()
         if not record:
-            messagebox.showinfo("未选择记录", "请先在历史记录中选择一条。")
+            messagebox.showinfo(t('未选择记录'), t('请先在历史记录中选择一条。'))
             return
         self.clipboard_clear()
         self.clipboard_append(record.get("command", ""))
-        self._status("上传命令已复制到剪贴板", "muted")
+        self._status(t('上传命令已复制到剪贴板'), "muted")
 
     def delete_selected_record(self) -> None:
         selection = self.tree.selection()
         if not selection:
             return
         index = self.tree.index(selection[0])
-        if not messagebox.askyesno("删除记录", "只删除这条历史记录，日志文件会保留。确定吗？"):
+        if not messagebox.askyesno(t('删除记录'), t('只删除这条历史记录，日志文件会保留。确定吗？')):
             return
         record_index = len(self.history) - 1 - index
         if 0 <= record_index < len(self.history):
@@ -3337,7 +3382,7 @@ class App(tk.Tk):
     def clear_history(self) -> None:
         if not self.history:
             return
-        if not messagebox.askyesno("清空历史", "确定清空全部上传历史吗？日志文件会保留。"):
+        if not messagebox.askyesno(t('清空历史'), t('确定清空全部上传历史吗？日志文件会保留。')):
             return
         self.history = []
         save_history(self.history)
@@ -3377,13 +3422,13 @@ class App(tk.Tk):
                     self.cert_busy = False
                     if error:
                         self._cert_status(error, "err")
-                        messagebox.showerror("证书操作失败", error)
+                        messagebox.showerror(t('证书操作失败'), error)
                     elif callback:
                         try:
                             callback(result)
                         except Exception as exc:
                             self._cert_status(str(exc), "err")
-                            messagebox.showerror("证书操作失败", str(exc))
+                            messagebox.showerror(t('证书操作失败'), str(exc))
                 elif kind == "cert_ui":
                     try:
                         event[1]()
@@ -3393,12 +3438,12 @@ class App(tk.Tk):
             pass
         if self.uploading and not self.cancel_requested:
             elapsed = time.monotonic() - self.started_at
-            self._status(f"上传中… 已用时 {human_duration(elapsed)}", "muted")
+            self._status(t('上传中… 已用时 {p0}').format(p0=human_duration(elapsed)), "muted")
         self.after(100, self._poll_events)
 
     def _on_close(self) -> None:
         if self.uploading:
-            if not messagebox.askyesno("正在上传", "上传仍在进行，退出会中断上传。确定退出吗？"):
+            if not messagebox.askyesno(t('正在上传'), t('上传仍在进行，退出会中断上传。确定退出吗？')):
                 return
         self.destroy()
 
@@ -3412,7 +3457,7 @@ class CertWizard(tk.Toplevel):
         super().__init__(app)
         self.app = app
         self.px = app.px
-        self.title("新建证书申请")
+        self.title(t('新建证书申请'))
         width, height = self.px(820), self.px(600)
         screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{width}x{height}+{(screen_w - width) // 2}+{(screen_h - height) // 2 - self.px(20)}")
@@ -3430,9 +3475,9 @@ class CertWizard(tk.Toplevel):
         self.pwd_var = tk.StringVar()
         self.pwd2_var = tk.StringVar()
         self.chain_var = tk.BooleanVar(value=True)
-        self.cert_info_var = tk.StringVar(value="尚未获取证书")
-        self.key_info_var = tk.StringVar(value="尚未生成密钥")
-        self.p12_info_var = tk.StringVar(value="尚未生成 P12")
+        self.cert_info_var = tk.StringVar(value=t('尚未获取证书'))
+        self.key_info_var = tk.StringVar(value=t('尚未生成密钥'))
+        self.p12_info_var = tk.StringVar(value=t('尚未生成 P12'))
 
         self.reuse_cert_var = tk.StringVar()
         self.reuse_state_var = tk.StringVar(value="")
@@ -3448,7 +3493,7 @@ class CertWizard(tk.Toplevel):
 
         self.pos = 0
         self.seq = [0, 1, 2, 3, 4]
-        self.header_texts = list(self.STEPS)
+        self.header_texts = [t(text) for text in self.STEPS]
 
         self._build()
         self._show_pos(0)
@@ -3462,7 +3507,7 @@ class CertWizard(tk.Toplevel):
         header.pack(fill="x")
         header.pack_propagate(False)
         self.step_cells = []
-        for index, text in enumerate(self.STEPS):
+        for index, text in enumerate(self.header_texts):
             cell = tk.Frame(header, bg=COLOR_HEADER)
             cell.pack(side="left", padx=(px(18) if index == 0 else px(8), 0))
             badge = tk.Label(
@@ -3495,25 +3540,25 @@ class CertWizard(tk.Toplevel):
 
         footer = ttk.Frame(self, padding=(px(18), 0, px(18), px(16)))
         footer.pack(fill="x")
-        self.btn_back = ttk.Button(footer, text="上一步", command=self._go_back)
+        self.btn_back = ttk.Button(footer, text=t('上一步'), command=self._go_back)
         self.btn_back.pack(side="left")
-        self.btn_next = ttk.Button(footer, text="下一步", command=self._go_next)
+        self.btn_next = ttk.Button(footer, text=t('下一步'), command=self._go_next)
         self.btn_next.pack(side="right")
-        ttk.Button(footer, text="取消", command=self._close).pack(side="right", padx=px(8))
+        ttk.Button(footer, text=t('取消'), command=self._close).pack(side="right", padx=px(8))
 
     def _build_step1(self) -> ttk.Frame:
         px = self.px
         frame = ttk.Frame(self.body)
         frame.columnconfigure(0, weight=1)
 
-        source = ttk.LabelFrame(frame, text=" 证书来源 ", padding=(px(12), px(10)))
+        source = ttk.LabelFrame(frame, text=t(' 证书来源 '), padding=(px(12), px(10)))
         source.grid(row=0, column=0, sticky="ew")
         ttk.Radiobutton(
-            source, text="新建证书", variable=self.source_var, value="new",
+            source, text=t('新建证书'), variable=self.source_var, value="new",
             command=lambda: self._apply_mode("new"),
         ).pack(side="left")
         ttk.Radiobutton(
-            source, text="使用已有证书（给另一个应用打包）", variable=self.source_var, value="existing",
+            source, text=t('使用已有证书（给另一个应用打包）'), variable=self.source_var, value="existing",
             command=lambda: self._apply_mode("existing"),
         ).pack(side="left", padx=(px(16), 0))
 
@@ -3525,7 +3570,7 @@ class CertWizard(tk.Toplevel):
         self.existing_form.grid(row=1, column=0, sticky="nsew", pady=(px(12), 0))
         self.existing_form.columnconfigure(1, weight=1)
         self.existing_form.grid_remove()
-        ttk.Label(self.existing_form, text="使用证书").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.existing_form, text=t('使用证书')).grid(row=0, column=0, sticky="w")
         self.reuse_cert_box = ttk.Combobox(
             self.existing_form, textvariable=self.reuse_cert_var, state="readonly", width=56,
         )
@@ -3536,42 +3581,42 @@ class CertWizard(tk.Toplevel):
             wraplength=px(680), justify="left",
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
         self.reuse_p12_btn = ttk.Button(
-            self.existing_form, text="生成 P12…", command=self._reuse_build_p12,
+            self.existing_form, text=t('生成 P12…'), command=self._reuse_build_p12,
         )
         self.reuse_p12_btn.grid(row=2, column=0, sticky="w", pady=(px(8), 0))
         ttk.Label(
             self.existing_form,
-            text="同一张证书可以给多个应用签名；换应用只需新建对应的描述文件，不用重新申请证书。",
-            style="Hint.TLabel",
+            text=t('同一张证书可以给多个应用签名；换应用只需新建对应的描述文件，不用重新申请证书。'),
+            style="Hint.TLabel", wraplength=px(680), justify="left",
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(px(12), 0))
 
-        ttk.Label(self.new_form, text="证书名称").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.new_form, text=t('证书名称')).grid(row=0, column=0, sticky="w")
         ttk.Entry(self.new_form, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", padx=(px(10), 0))
 
-        ttk.Label(self.new_form, text="用途类型").grid(row=1, column=0, sticky="w", pady=(px(12), 0))
+        ttk.Label(self.new_form, text=t('用途类型')).grid(row=1, column=0, sticky="w", pady=(px(12), 0))
         ttk.Combobox(
             self.new_form, textvariable=self.type_var,
             values=[item[0] for item in CERT_TYPE_CHOICES], state="readonly",
         ).grid(row=1, column=1, sticky="ew", padx=(px(10), 0), pady=(px(12), 0))
         ttk.Label(
             self.new_form,
-            text="HBuilderX 云打包签名选「Apple Distribution」或「iOS Distribution」；uni-push 用「Apple Push Services」。",
+            text=t('HBuilderX 云打包签名选「Apple Distribution」或「iOS Distribution」；uni-push 用「Apple Push Services」。'),
             style="Hint.TLabel",
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
 
-        ttk.Label(self.new_form, text="密钥算法").grid(row=3, column=0, sticky="w", pady=(px(12), 0))
+        ttk.Label(self.new_form, text=t('密钥算法')).grid(row=3, column=0, sticky="w", pady=(px(12), 0))
         ttk.Combobox(
             self.new_form, textvariable=self.algo_var,
             values=["RSA 2048", "EC P-256"], state="readonly",
         ).grid(row=3, column=1, sticky="ew", padx=(px(10), 0), pady=(px(12), 0))
 
-        ttk.Label(self.new_form, text="保存目录").grid(row=4, column=0, sticky="w", pady=(px(12), 0))
+        ttk.Label(self.new_form, text=t('保存目录')).grid(row=4, column=0, sticky="w", pady=(px(12), 0))
         dir_row = ttk.Frame(self.new_form)
         dir_row.grid(row=4, column=1, sticky="ew", padx=(px(10), 0), pady=(px(12), 0))
         dir_row.columnconfigure(0, weight=1)
         ttk.Entry(dir_row, textvariable=self.dir_var).grid(row=0, column=0, sticky="ew")
         ttk.Button(
-            dir_row, text="浏览…",
+            dir_row, text=t('浏览…'),
             command=lambda: self.app._browse_dir(self.dir_var),
         ).grid(row=0, column=1, padx=(px(8), 0))
 
@@ -3579,10 +3624,9 @@ class CertWizard(tk.Toplevel):
         ttk.Label(
             self.new_form,
             text=(
-                "流程：① 本地生成私钥与 CSR → ② Apple 用 CSR 签发证书 → ③ 本地把证书与私钥合成 .p12。\n"
-                "私钥文件一旦丢失只能重新申请证书，请在同目录备份。"
+                t('流程：① 本地生成私钥与 CSR → ② Apple 用 CSR 签发证书 → ③ 本地把证书与私钥合成 .p12。\n私钥文件一旦丢失只能重新申请证书，请在同目录备份。')
             ),
-            style="Hint.TLabel", justify="left",
+            style="Hint.TLabel", justify="left", wraplength=px(680),
         ).grid(row=6, column=0, columnspan=2, sticky="w")
         return frame
 
@@ -3596,7 +3640,7 @@ class CertWizard(tk.Toplevel):
         self.reuse_bundle_box.grid(row=0, column=1, sticky="ew", padx=(px(10), 0))
         self.reuse_bundle_box.bind("<<ComboboxSelected>>", lambda _event: self._sync_reuse_name())
 
-        ttk.Label(frame, text="类型").grid(row=1, column=0, sticky="w", pady=(px(8), 0))
+        ttk.Label(frame, text=t('类型')).grid(row=1, column=0, sticky="w", pady=(px(8), 0))
         ttk.Combobox(
             frame, textvariable=self.reuse_type_var,
             values=[item[0] for item in PROFILE_TYPE_CHOICES], state="readonly",
@@ -3606,28 +3650,28 @@ class CertWizard(tk.Toplevel):
         lists.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(px(12), 0))
         lists.columnconfigure(0, weight=1)
         lists.columnconfigure(1, weight=1)
-        ttk.Label(lists, text="证书（可多选）").grid(row=0, column=0, sticky="w")
-        ttk.Label(lists, text="设备（Ad Hoc / Development）").grid(row=0, column=1, sticky="w", padx=(px(10), 0))
+        ttk.Label(lists, text=t('证书（可多选）')).grid(row=0, column=0, sticky="w")
+        ttk.Label(lists, text=t('设备（Ad Hoc / Development）')).grid(row=0, column=1, sticky="w", padx=(px(10), 0))
         self.reuse_cert_list = tk.Listbox(lists, selectmode="extended", height=5, exportselection=False)
         self.reuse_cert_list.grid(row=1, column=0, sticky="ew", pady=(px(4), 0))
         self.reuse_device_list = tk.Listbox(lists, selectmode="extended", height=5, exportselection=False)
         self.reuse_device_list.grid(row=1, column=1, sticky="ew", padx=(px(10), 0), pady=(px(4), 0))
 
-        ttk.Label(frame, text="保存目录").grid(row=3, column=0, sticky="w", pady=(px(10), 0))
+        ttk.Label(frame, text=t('保存目录')).grid(row=3, column=0, sticky="w", pady=(px(10), 0))
         dir_row = ttk.Frame(frame)
         dir_row.grid(row=3, column=1, sticky="ew", padx=(px(10), 0), pady=(px(10), 0))
         dir_row.columnconfigure(0, weight=1)
         ttk.Entry(dir_row, textvariable=self.reuse_dir_var).grid(row=0, column=0, sticky="ew")
         ttk.Button(
-            dir_row, text="浏览…",
+            dir_row, text=t('浏览…'),
             command=lambda: self.app._browse_dir(self.reuse_dir_var),
         ).grid(row=0, column=1, padx=(px(8), 0))
         ttk.Checkbutton(
-            frame, text="同时把 P12 复制到该目录（默认只放描述文件）",
+            frame, text=t('同时把 P12 复制到该目录（默认只放描述文件）'),
             variable=self.reuse_copy_p12_var,
         ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
 
-        ttk.Label(frame, text="描述文件名称").grid(row=5, column=0, sticky="w", pady=(px(10), 0))
+        ttk.Label(frame, text=t('描述文件名称')).grid(row=5, column=0, sticky="w", pady=(px(10), 0))
         ttk.Entry(frame, textvariable=self.reuse_name_var).grid(
             row=5, column=1, sticky="ew", padx=(px(10), 0), pady=(px(10), 0),
         )
@@ -3635,11 +3679,11 @@ class CertWizard(tk.Toplevel):
         row = ttk.Frame(frame)
         row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(px(12), 0))
         self.reuse_create_btn = ttk.Button(
-            row, text="创建并下载描述文件", command=self._reuse_create, state="disabled",
+            row, text=t('创建并下载描述文件'), command=self._reuse_create, state="disabled",
         )
         self.reuse_create_btn.pack(side="left")
         ttk.Label(
-            row, text="创建后自动保存，并给出 HBuilderX 该填的路径。", style="Hint.TLabel",
+            row, text=t('创建后自动保存，并给出 HBuilderX 该填的路径。'), style="Hint.TLabel",
         ).pack(side="left", padx=(px(10), 0))
 
         ttk.Label(
@@ -3654,9 +3698,9 @@ class CertWizard(tk.Toplevel):
         frame.columnconfigure(0, weight=1)
         ttk.Label(
             frame,
-            text="在本机生成密钥对和证书签名请求（CSR）。这一步不联网，不会消耗 Apple 证书名额。",
+            text=t('在本机生成密钥对和证书签名请求（CSR）。这一步不联网，不会消耗 Apple 证书名额。'),
         ).grid(row=0, column=0, sticky="w")
-        ttk.Button(frame, text="生成密钥与 CSR", command=self._generate_key).grid(
+        ttk.Button(frame, text=t('生成密钥与 CSR'), command=self._generate_key).grid(
             row=1, column=0, sticky="w", pady=(px(12), 0),
         )
         ttk.Label(frame, textvariable=self.key_info_var, style="Value.TLabel", wraplength=px(720), justify="left").grid(
@@ -3664,7 +3708,7 @@ class CertWizard(tk.Toplevel):
         )
         ttk.Label(
             frame,
-            text="生成后请立刻备份 .key 文件：Apple 只保存证书，私钥只存在这台电脑上。",
+            text=t('生成后请立刻备份 .key 文件：Apple 只保存证书，私钥只存在这台电脑上。'),
             style="Hint.TLabel",
         ).grid(row=3, column=0, sticky="w", pady=(px(10), 0))
         return frame
@@ -3674,39 +3718,37 @@ class CertWizard(tk.Toplevel):
         frame = ttk.Frame(self.body)
         frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="选择获取证书的方式：").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=t('选择获取证书的方式：')).grid(row=0, column=0, sticky="w")
 
-        auto = ttk.LabelFrame(frame, text=" 方式一：通过 API 自动申请（推荐） ", padding=(px(12), px(10)))
+        auto = ttk.LabelFrame(frame, text=t(' 方式一：通过 API 自动申请（推荐） '), padding=(px(12), px(10)))
         auto.grid(row=1, column=0, sticky="ew", pady=(px(10), 0))
         auto.columnconfigure(0, weight=1)
         ttk.Label(
             auto,
-            text="用「设置」页的 API Key 把 CSR 直接提交给 Apple，证书自动保存到本地。",
+            text=t('用「设置」页的 API Key 把 CSR 直接提交给 Apple，证书自动保存到本地。'),
             style="Hint.TLabel",
         ).grid(row=0, column=0, sticky="w")
-        ttk.Button(auto, text="提交 CSR 并获取证书", command=self._submit_auto).grid(
+        ttk.Button(auto, text=t('提交 CSR 并获取证书'), command=self._submit_auto).grid(
             row=1, column=0, sticky="w", pady=(px(8), 0),
         )
 
-        manual = ttk.LabelFrame(frame, text=" 方式二：在开发者网站手动申请 ", padding=(px(12), px(10)))
+        manual = ttk.LabelFrame(frame, text=t(' 方式二：在开发者网站手动申请 '), padding=(px(12), px(10)))
         manual.grid(row=2, column=0, sticky="ew", pady=(px(10), 0))
         manual.columnconfigure(0, weight=1)
         ttk.Label(
             manual,
             text=(
-                "1. 打开 Apple 开发者网站 → Certificates → 点「+」\n"
-                "2. 选择与上一步一致的证书类型，上传刚生成的 .csr 文件\n"
-                "3. 下载签发的 .cer，回到这里导入"
+                t('1. 打开 Apple 开发者网站 → Certificates → 点「+」\n2. 选择与上一步一致的证书类型，上传刚生成的 .csr 文件\n3. 下载签发的 .cer，回到这里导入')
             ),
             justify="left",
         ).grid(row=0, column=0, sticky="w")
         row = ttk.Frame(manual)
         row.grid(row=1, column=0, sticky="w", pady=(px(8), 0))
-        ttk.Button(row, text="打开证书页面", command=lambda: webbrowser.open(PORTAL_CERT_URL)).pack(side="left")
-        ttk.Button(row, text="选择已下载的 .cer…", command=self._choose_cer).pack(side="left", padx=px(8))
+        ttk.Button(row, text=t('打开证书页面'), command=lambda: webbrowser.open(PORTAL_CERT_URL)).pack(side="left")
+        ttk.Button(row, text=t('选择已下载的 .cer…'), command=self._choose_cer).pack(side="left", padx=px(8))
 
         ttk.Separator(frame).grid(row=3, column=0, sticky="ew", pady=(px(14), px(10)))
-        ttk.Label(frame, text="当前证书：").grid(row=4, column=0, sticky="w")
+        ttk.Label(frame, text=t('当前证书：')).grid(row=4, column=0, sticky="w")
         ttk.Label(
             frame, textvariable=self.cert_info_var, style="Value.TLabel",
             wraplength=px(720), justify="left",
@@ -3720,22 +3762,22 @@ class CertWizard(tk.Toplevel):
 
         ttk.Label(
             frame,
-            text="把 Apple 签发的证书与本机私钥打包成 .p12，HBuilderX 云打包的 iOS 签名用它。",
+            text=t('把 Apple 签发的证书与本机私钥打包成 .p12，HBuilderX 云打包的 iOS 签名用它。'),
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, px(10)))
 
-        ttk.Label(frame, text="P12 密码").grid(row=1, column=0, sticky="w")
+        ttk.Label(frame, text=t('P12 密码')).grid(row=1, column=0, sticky="w")
         ttk.Entry(frame, textvariable=self.pwd_var, show="*").grid(row=1, column=1, sticky="ew", padx=(px(10), 0))
-        ttk.Label(frame, text="再次输入").grid(row=2, column=0, sticky="w", pady=(px(8), 0))
+        ttk.Label(frame, text=t('再次输入')).grid(row=2, column=0, sticky="w", pady=(px(8), 0))
         ttk.Entry(frame, textvariable=self.pwd2_var, show="*").grid(
             row=2, column=1, sticky="ew", padx=(px(10), 0), pady=(px(8), 0),
         )
 
         ttk.Checkbutton(
-            frame, text="附带 Apple 中间证书（推荐，下载失败会自动跳过）",
+            frame, text=t('附带 Apple 中间证书（推荐，下载失败会自动跳过）'),
             variable=self.chain_var,
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(px(12), 0))
 
-        ttk.Button(frame, text="生成 P12", command=self._build_p12).grid(
+        ttk.Button(frame, text=t('生成 P12'), command=self._build_p12).grid(
             row=4, column=0, sticky="w", pady=(px(14), 0),
         )
         ttk.Label(frame, textvariable=self.p12_info_var, style="Value.TLabel", wraplength=px(720), justify="left").grid(
@@ -3747,22 +3789,21 @@ class CertWizard(tk.Toplevel):
         px = self.px
         frame = ttk.Frame(self.body)
         frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text="证书已就绪", font=(self.app.ui_family, 14, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=t('证书已就绪'), font=(self.app.ui_family, 14, "bold")).grid(row=0, column=0, sticky="w")
         self.summary_label = ttk.Label(frame, text="", justify="left", wraplength=px(730))
         self.summary_label.grid(row=1, column=0, sticky="w", pady=(px(12), 0))
         ttk.Label(
             frame,
             text=(
-                "接着在 HBuilderX 云打包的 iOS 签名里选择这个 .p12 并输入密码；"
-                "打包生成的 IPA 用「上传」页提交即可。"
+                t('接着在 HBuilderX 云打包的 iOS 签名里选择这个 .p12 并输入密码；打包生成的 IPA 用「上传」页提交即可。')
             ),
             style="Hint.TLabel", justify="left", wraplength=px(730),
         ).grid(row=2, column=0, sticky="w", pady=(px(10), 0))
         buttons = ttk.Frame(frame)
         buttons.grid(row=3, column=0, sticky="w", pady=(px(16), 0))
-        ttk.Button(buttons, text="打开证书目录", command=self._open_dir).pack(side="left")
-        ttk.Button(buttons, text="再申请一张", command=self._restart).pack(side="left", padx=px(8))
-        ttk.Button(buttons, text="由我继续申请描述文件", command=self._finish).pack(side="left")
+        ttk.Button(buttons, text=t('打开证书目录'), command=self._open_dir).pack(side="left")
+        ttk.Button(buttons, text=t('再申请一张'), command=self._restart).pack(side="left", padx=px(8))
+        ttk.Button(buttons, text=t('由我继续申请描述文件'), command=self._finish).pack(side="left")
         return frame
 
     # ------------------------------------------------------------ 步骤控制
@@ -3771,7 +3812,7 @@ class CertWizard(tk.Toplevel):
         self.source_var.set(kind)
         existing = kind == "existing"
         self.seq = [0, 5] if existing else [0, 1, 2, 3, 4]
-        self.header_texts = ["选择证书", "为新应用打包"] if existing else list(self.STEPS)
+        self.header_texts = [t('选择证书'), t('为新应用打包')] if existing else [t(text) for text in self.STEPS]
         self._set_header(self.header_texts)
         if existing:
             self.new_form.grid_remove()
@@ -3807,7 +3848,7 @@ class CertWizard(tk.Toplevel):
     def _update_nav(self) -> None:
         last = self.pos == len(self.seq) - 1
         self.btn_back.configure(state="normal" if self.pos > 0 else "disabled")
-        self.btn_next.configure(text="完成" if last else "下一步", state="normal")
+        self.btn_next.configure(text=t('完成') if last else t('下一步'), state="normal")
         if self.source_var.get() == "new" and last:
             self._update_summary()
 
@@ -3824,14 +3865,14 @@ class CertWizard(tk.Toplevel):
                 entry = self._reuse_entry()
                 if not entry:
                     messagebox.showwarning(
-                        "没有可用证书", "证书档案里没有可直接复用的证书，请先新建或补充私钥/P12。", parent=self,
+                        t('没有可用证书'), t('证书档案里没有可直接复用的证书，请先新建或补充私钥/P12。'), parent=self,
                     )
                     return
                 p12 = entry.get("p12_path") or ""
                 if not (p12 and Path(p12).is_file()):
                     messagebox.showwarning(
-                        "缺少 P12",
-                        "这张证书还没有可用的 P12，请先点「生成 P12…」生成后再继续。",
+                        t('缺少 P12'),
+                        t('这张证书还没有可用的 P12，请先点「生成 P12…」生成后再继续。'),
                         parent=self,
                     )
                     return
@@ -3841,13 +3882,13 @@ class CertWizard(tk.Toplevel):
 
         if self.pos == 0:
             if not self.name_var.get().strip():
-                messagebox.showwarning("缺少名称", "请填写证书名称。", parent=self)
+                messagebox.showwarning(t('缺少名称'), t('请填写证书名称。'), parent=self)
                 return
             directory = Path(self.dir_var.get().strip() or str(CERT_DIR))
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except Exception as exc:
-                messagebox.showerror("目录不可用", str(exc), parent=self)
+                messagebox.showerror(t('目录不可用'), str(exc), parent=self)
                 return
             self.dir_var.set(str(directory))
             if self.entry:
@@ -3867,19 +3908,19 @@ class CertWizard(tk.Toplevel):
                 self.app._refresh_cert_archive()
         elif self.pos == 1:
             if not (self.entry and self.entry.get("key_path") and Path(self.entry["key_path"]).is_file()):
-                messagebox.showwarning("尚未生成密钥", "请先在当前步骤生成密钥与 CSR。", parent=self)
+                messagebox.showwarning(t('尚未生成密钥'), t('请先在当前步骤生成密钥与 CSR。'), parent=self)
                 return
         elif self.pos == 2:
             if not (self.entry and self.entry.get("cer_path") and Path(self.entry["cer_path"]).is_file()):
                 messagebox.showwarning(
-                    "尚未获取证书",
-                    "请用 API 申请，或在开发者网站申请后用「选择已下载的 .cer…」导入。",
+                    t('尚未获取证书'),
+                    t('请用 API 申请，或在开发者网站申请后用「选择已下载的 .cer…」导入。'),
                     parent=self,
                 )
                 return
         elif self.pos == 3:
             if not (self.entry and self.entry.get("p12_path") and Path(self.entry["p12_path"]).is_file()):
-                messagebox.showwarning("尚未生成 P12", "请先在上一步生成 P12。", parent=self)
+                messagebox.showwarning(t('尚未生成 P12'), t('请先在上一步生成 P12。'), parent=self)
                 return
         self._show_pos(self.pos + 1)
 
@@ -3902,7 +3943,7 @@ class CertWizard(tk.Toplevel):
         if not self.reuse_entries:
             self.reuse_cert_var.set("")
             self.reuse_state_var.set(
-                "证书档案里没有可用于签名的证书：请先新建，或从 Apple 同步后补充私钥/P12。"
+                t('证书档案里没有可用于签名的证书：请先新建，或从 Apple 同步后补充私钥/P12。')
             )
             self.reuse_p12_btn.grid_remove()
             return
@@ -3929,11 +3970,11 @@ class CertWizard(tk.Toplevel):
             return
         p12 = entry.get("p12_path") or ""
         if p12 and Path(p12).is_file():
-            self.reuse_state_var.set(f"P12 已就绪：{p12}")
+            self.reuse_state_var.set(t('P12 已就绪：{p0}').format(p0=p12))
             self.reuse_p12_btn.grid_remove()
         else:
             self.reuse_state_var.set(
-                f"该证书只有 .cer 与私钥，需要先生成 P12。证书到期：{entry.get('not_after_text') or '—'}"
+                t('该证书只有 .cer 与私钥，需要先生成 P12。证书到期：{p0}').format(p0=entry.get('not_after_text') or '—')
             )
             self.reuse_p12_btn.grid()
 
@@ -3944,14 +3985,14 @@ class CertWizard(tk.Toplevel):
         cer_path = entry.get("cer_path") or ""
         key_path = entry.get("key_path") or ""
         if not (cer_path and Path(cer_path).is_file() and key_path and Path(key_path).is_file()):
-            messagebox.showwarning("材料不全", "这张证书缺少 .cer 或私钥，无法生成 P12。", parent=self)
+            messagebox.showwarning(t('材料不全'), t('这张证书缺少 .cer 或私钥，无法生成 P12。'), parent=self)
             return
         password = self.app._ask_p12_password()
         if not password:
             return
         default = Path(cer_path).with_suffix(".p12")
         target = filedialog.asksaveasfilename(
-            parent=self, title="保存 P12",
+            parent=self, title=t('保存 P12'),
             initialdir=str(default.parent), initialfile=default.name,
             defaultextension=".p12", filetypes=[("PKCS#12", "*.p12")],
         )
@@ -3973,14 +4014,14 @@ class CertWizard(tk.Toplevel):
             save_cert_index(index)
             self.app._refresh_cert_archive()
             self._refresh_reuse_certs()
-            self.reuse_state_var.set(f"P12 已生成：{target}（中间证书 {len(chain)} 张）")
+            self.reuse_state_var.set(t('P12 已生成：{p0}（中间证书 {p1} 张）').format(p0=target, p1=len(chain)))
 
-        self.app._run_cert_task("正在生成 P12…", task, done)
+        self.app._run_cert_task(t('正在生成 P12…'), task, done)
 
     def _load_reuse_data(self) -> None:
         problem = self.app._runtime_problem()
         if problem:
-            self.reuse_result_var.set(f"无法连接 Apple：{problem}，请先到「设置」页补全 API Key。")
+            self.reuse_result_var.set(t('无法连接 Apple：{p0}，请先到「设置」页补全 API Key。').format(p0=problem))
             return
         try:
             token = token_from_config(self.app.cfg)
@@ -3989,7 +4030,7 @@ class CertWizard(tk.Toplevel):
             return
         self.reuse_token = token
         self.reuse_create_btn.configure(state="disabled")
-        self.reuse_result_var.set("正在读取 Bundle ID、证书与设备…")
+        self.reuse_result_var.set(t('正在读取 Bundle ID、证书与设备…'))
 
         def task():
             return (
@@ -4002,7 +4043,7 @@ class CertWizard(tk.Toplevel):
             bundles, certs, devices = result
             self.reuse_data = {"bundles": bundles, "certs": certs, "devices": devices}
             self.reuse_bundle_box["values"] = [
-                f"{item['identifier']}（{item['name']}）" for item in bundles
+                t('{p0}（{p1}）').format(p0=item['identifier'], p1=item['name']) for item in bundles
             ]
             if bundles:
                 self.reuse_bundle_box.current(0)
@@ -4021,10 +4062,10 @@ class CertWizard(tk.Toplevel):
                 self.reuse_device_list.insert("end", f"{item['name']} · {item['udid']}")
             self.reuse_create_btn.configure(state="normal")
             self.reuse_result_var.set(
-                f"已读取 {len(bundles)} 个 Bundle ID、{len(certs)} 张证书、{len(devices)} 台设备。"
+                t('已读取 {p0} 个 Bundle ID、{p1} 张证书、{p2} 台设备。').format(p0=len(bundles), p1=len(certs), p2=len(devices))
             )
 
-        self.app._run_cert_task("正在读取 Apple 数据…", task, done)
+        self.app._run_cert_task(t('正在读取 Apple 数据…'), task, done)
 
     def _sync_reuse_name(self) -> None:
         index = self.reuse_bundle_box.current()
@@ -4038,14 +4079,14 @@ class CertWizard(tk.Toplevel):
             return
         bundle_index = self.reuse_bundle_box.current()
         if bundle_index < 0:
-            messagebox.showwarning("缺少参数", "请选择 Bundle ID。", parent=self)
+            messagebox.showwarning(t('缺少参数'), t('请选择 Bundle ID。'), parent=self)
             return
         cert_ids = [
             self.reuse_data["certs"][index]["id"]
             for index in self.reuse_cert_list.curselection()
         ]
         if not cert_ids:
-            messagebox.showwarning("缺少参数", "请至少选择一张证书。", parent=self)
+            messagebox.showwarning(t('缺少参数'), t('请至少选择一张证书。'), parent=self)
             return
         profile_label = self.reuse_type_var.get()
         profile_code = dict(PROFILE_TYPE_CHOICES)[profile_label]
@@ -4056,14 +4097,13 @@ class CertWizard(tk.Toplevel):
                 for index in self.reuse_device_list.curselection()
             ]
             if not device_ids:
-                messagebox.showwarning("缺少参数", "Ad Hoc / Development 需要选择设备。", parent=self)
+                messagebox.showwarning(t('缺少参数'), t('Ad Hoc / Development 需要选择设备。'), parent=self)
                 return
         bundle = self.reuse_data["bundles"][bundle_index]
         name = self.reuse_name_var.get().strip() or f"{bundle['identifier']} {profile_label}"
         if not messagebox.askyesno(
-            "创建描述文件",
-            f"将在 Apple 上创建「{name}」（{profile_label}），\n"
-            f"Bundle ID：{bundle['identifier']}\n\n确定继续吗？",
+            t('创建描述文件'),
+            t('将在 Apple 上创建「{p0}」（{p1}），\nBundle ID：{p2}\n\n确定继续吗？').format(p0=name, p1=profile_label, p2=bundle['identifier']),
             parent=self,
         ):
             return
@@ -4072,7 +4112,7 @@ class CertWizard(tk.Toplevel):
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            messagebox.showerror("保存目录不可用", str(exc), parent=self)
+            messagebox.showerror(t('保存目录不可用'), str(exc), parent=self)
             return
         copy_p12 = self.reuse_copy_p12_var.get()
         p12 = entry.get("p12_path") or ""
@@ -4095,30 +4135,30 @@ class CertWizard(tk.Toplevel):
         def done(result) -> None:
             info, copied = result
             self.app._link_profile_to_archives(info)
-            lines = [f"描述文件已创建：{info.get('path', '')}"]
+            lines = [t('描述文件已创建：{p0}').format(p0=info.get('path', ''))]
             if copied:
-                lines.append(f"P12 已复制：{copied}")
+                lines.append(t('P12 已复制：{p0}').format(p0=copied))
             elif copy_p12:
-                lines.append("P12 复制失败，请手动复制。")
+                lines.append(t('P12 复制失败，请手动复制。'))
             lines.extend(
                 [
                     "",
-                    "HBuilderX 云打包填写：",
-                    f"  私钥证书：{copied or p12}",
-                    f"  证书 profile 文件：{info.get('path', '')}",
+                    t('HBuilderX 云打包填写：'),
+                    t('  私钥证书：{p0}').format(p0=copied or p12),
+                    t('  证书 profile 文件：{p0}').format(p0=info.get('path', '')),
                 ]
             )
             self.reuse_result_var.set("\n".join(lines))
 
-        self.app._run_cert_task("正在创建描述文件…", task, done)
+        self.app._run_cert_task(t('正在创建描述文件…'), task, done)
 
     # ------------------------------------------------------------ 步骤 2
 
     def _generate_key(self) -> None:
         if self.entry and self.entry.get("key_path") and Path(self.entry["key_path"]).is_file():
             if not messagebox.askyesno(
-                "重新生成密钥",
-                "当前申请已有密钥。重新生成会让已申请的证书作废，确定吗？",
+                t('重新生成密钥'),
+                t('当前申请已有密钥。重新生成会让已申请的证书作废，确定吗？'),
                 parent=self,
             ):
                 return
@@ -4138,7 +4178,7 @@ class CertWizard(tk.Toplevel):
             except Exception:
                 pass
         except Exception as exc:
-            messagebox.showerror("生成失败", str(exc), parent=self)
+            messagebox.showerror(t('生成失败'), str(exc), parent=self)
             return
 
         entry = {
@@ -4170,36 +4210,35 @@ class CertWizard(tk.Toplevel):
         self.app._refresh_cert_archive()
 
         self.key_info_var.set(
-            f"私钥：{key_path}\nCSR：{csr_path}\n\n算法：{self.algo_var.get()}"
+            t('私钥：{p0}\nCSR：{p1}\n\n算法：{p2}').format(p0=key_path, p1=csr_path, p2=self.algo_var.get())
         )
-        self.app._cert_status(f"已生成密钥与 CSR：{base}", "ok")
+        self.app._cert_status(t('已生成密钥与 CSR：{p0}').format(p0=base), "ok")
 
     # ------------------------------------------------------------ 步骤 3
 
     def _submit_auto(self) -> None:
         if not (self.entry and self.entry.get("csr_path") and Path(self.entry["csr_path"]).is_file()):
-            messagebox.showwarning("尚未生成 CSR", "请先在上一步生成密钥与 CSR。", parent=self)
+            messagebox.showwarning(t('尚未生成 CSR'), t('请先在上一步生成密钥与 CSR。'), parent=self)
             return
         problem = self.app._runtime_problem()
         if problem:
             messagebox.showwarning(
-                "API Key 不可用",
-                problem + "\n\n请到「设置」页补全，或改用方式二在开发者网站申请。",
+                t('API Key 不可用'),
+                problem + t('\n\n请到「设置」页补全，或改用方式二在开发者网站申请。'),
                 parent=self,
             )
             return
         cert_type = self.entry.get("cert_type") or "IOS_DISTRIBUTION"
         if self.entry.get("cer_path") and Path(self.entry["cer_path"]).is_file():
             if not messagebox.askyesno(
-                "已有证书",
-                "当前申请已经获取过证书，继续会再申请一张并消耗名额。确定吗？",
+                t('已有证书'),
+                t('当前申请已经获取过证书，继续会再申请一张并消耗名额。确定吗？'),
                 parent=self,
             ):
                 return
         if not messagebox.askyesno(
-            "确认申请",
-            "将把 CSR 提交给 Apple 并申请一张新证书。\n\n"
-            "注意：每种类型的证书名额有限（通常 2 张），申请会产生真实证书。\n确定继续吗？",
+            t('确认申请'),
+            t('将把 CSR 提交给 Apple 并申请一张新证书。\n\n注意：每种类型的证书名额有限（通常 2 张），申请会产生真实证书。\n确定继续吗？'),
             parent=self,
         ):
             return
@@ -4211,14 +4250,14 @@ class CertWizard(tk.Toplevel):
             try:
                 _write_cert_content(result["content"], target)
             except Exception as exc:
-                messagebox.showerror("保存证书失败", str(exc), parent=self)
+                messagebox.showerror(t('保存证书失败'), str(exc), parent=self)
                 return
             self._adopt_certificate(target, result.get("id", ""))
-            self.app._cert_status(f"Apple 已签发证书：{target.name}", "ok")
-            messagebox.showinfo("证书已签发", f"已保存到：\n{target}", parent=self)
+            self.app._cert_status(t('Apple 已签发证书：{p0}').format(p0=target.name), "ok")
+            messagebox.showinfo(t('证书已签发'), t('已保存到：\n{p0}').format(p0=target), parent=self)
 
         self.app._run_cert_task(
-            "正在向 Apple 申请证书…",
+            t('正在向 Apple 申请证书…'),
             lambda: create_remote_certificate(token, csr_path.read_bytes(), cert_type),
             done,
         )
@@ -4226,26 +4265,26 @@ class CertWizard(tk.Toplevel):
     def _choose_cer(self) -> None:
         chosen = filedialog.askopenfilename(
             parent=self,
-            title="选择从 Apple 下载的证书",
-            filetypes=[("证书", "*.cer *.crt *.pem"), ("所有文件", "*.*")],
+            title=t('选择从 Apple 下载的证书'),
+            filetypes=[(t('证书'), "*.cer *.crt *.pem"), (t('所有文件'), "*.*")],
         )
         if not chosen:
             return
         if not (self.entry and self.entry.get("key_path")):
-            messagebox.showwarning("尚未生成密钥", "请先在上一步生成密钥与 CSR。", parent=self)
+            messagebox.showwarning(t('尚未生成密钥'), t('请先在上一步生成密钥与 CSR。'), parent=self)
             return
         target = Path(self.entry["key_path"]).with_suffix(".cer")
         try:
             shutil.copy2(chosen, target)
             self._adopt_certificate(target, "")
         except Exception as exc:
-            messagebox.showerror("导入失败", str(exc), parent=self)
+            messagebox.showerror(t('导入失败'), str(exc), parent=self)
 
     def _adopt_certificate(self, path: Path, apple_cert_id: str = "") -> None:
         try:
             info = describe_certificate(load_certificate_file(str(path)))
         except Exception as exc:
-            messagebox.showerror("无法读取证书", str(exc), parent=self)
+            messagebox.showerror(t('无法读取证书'), str(exc), parent=self)
             return
         entry = self.entry or {}
         entry.update(
@@ -4273,25 +4312,24 @@ class CertWizard(tk.Toplevel):
         save_cert_index(index)
         self.app._refresh_cert_archive()
         self.cert_info_var.set(
-            f"{info['cn']}\n序列号 {info['serial']}\n有效期 {info['not_before_text']} → {info['not_after_text']}"
-            f"（剩余 {info['days_left']} 天）\n签发者 {info['issuer']}"
+            t('{p0}\n序列号 {p1}\n有效期 {p2} → {p3}（剩余 {p4} 天）\n签发者 {p5}').format(p0=info['cn'], p1=info['serial'], p2=info['not_before_text'], p3=info['not_after_text'], p4=info['days_left'], p5=info['issuer'])
         )
 
     # ------------------------------------------------------------ 步骤 4
 
     def _build_p12(self) -> None:
         if not (self.entry and self.entry.get("cer_path")):
-            messagebox.showwarning("尚未获取证书", "请先完成上一步获取证书。", parent=self)
+            messagebox.showwarning(t('尚未获取证书'), t('请先完成上一步获取证书。'), parent=self)
             return
         password = self.pwd_var.get()
         if len(password) < 6:
-            messagebox.showwarning("密码太短", "P12 密码至少 6 位。", parent=self)
+            messagebox.showwarning(t('密码太短'), t('P12 密码至少 6 位。'), parent=self)
             return
         if password != self.pwd2_var.get():
-            messagebox.showwarning("两次输入不一致", "请重新确认密码。", parent=self)
+            messagebox.showwarning(t('两次输入不一致'), t('请重新确认密码。'), parent=self)
             return
         target = Path(self.entry["cer_path"]).with_suffix(".p12")
-        if target.exists() and not messagebox.askyesno("覆盖文件", f"{target.name} 已存在，覆盖吗？", parent=self):
+        if target.exists() and not messagebox.askyesno(t('覆盖文件'), t('{p0} 已存在，覆盖吗？').format(p0=target.name), parent=self):
             return
         cer_path = self.entry["cer_path"]
         key_path = self.entry["key_path"]
@@ -4316,28 +4354,27 @@ class CertWizard(tk.Toplevel):
             save_cert_index(index)
             self.app._refresh_cert_archive()
             self.p12_info_var.set(
-                f"{target}\n大小 {human_size(info['size'])}，附带中间证书 {len(chain)} 张。\n"
-                "密码请单独保存，丢失后只能重新合成。"
+                t('{p0}\n大小 {p1}，附带中间证书 {p2} 张。\n密码请单独保存，丢失后只能重新合成。').format(p0=target, p1=human_size(info['size']), p2=len(chain))
             )
-            self.app._cert_status(f"P12 已生成：{target.name}", "ok")
+            self.app._cert_status(t('P12 已生成：{p0}').format(p0=target.name), "ok")
 
-        self.app._run_cert_task("正在生成 P12…", task, done)
+        self.app._run_cert_task(t('正在生成 P12…'), task, done)
 
     # ------------------------------------------------------------ 收尾
 
     def _update_summary(self) -> None:
         entry = self.entry or {}
         lines = [
-            f"名称：{entry.get('name', '')}",
-            f"类型：{entry.get('type', '')}",
-            f"通用名称：{entry.get('cn') or '—'}",
-            f"序列号：{entry.get('serial') or '—'}",
-            f"有效期至：{entry.get('not_after_text') or '—'}（剩余 {entry.get('days_left', '—')} 天）",
+            t('名称：{p0}').format(p0=entry.get('name', '')),
+            t('类型：{p0}').format(p0=entry.get('type', '')),
+            t('通用名称：{p0}').format(p0=entry.get('cn') or '—'),
+            t('序列号：{p0}').format(p0=entry.get('serial') or '—'),
+            t('有效期至：{p0}（剩余 {p1} 天）').format(p0=entry.get('not_after_text') or '—', p1=entry.get('days_left', '—')),
             "",
-            f"私钥：{entry.get('key_path') or '—'}",
-            f"CSR：{entry.get('csr_path') or '—'}",
-            f"证书：{entry.get('cer_path') or '—'}",
-            f"P12：{entry.get('p12_path') or '—'}",
+            t('私钥：{p0}').format(p0=entry.get('key_path') or '—'),
+            t('CSR：{p0}').format(p0=entry.get('csr_path') or '—'),
+            t('证书：{p0}').format(p0=entry.get('cer_path') or '—'),
+            t('P12：{p0}').format(p0=entry.get('p12_path') or '—'),
         ]
         self.summary_label.configure(text="\n".join(lines))
 
@@ -4361,9 +4398,9 @@ class CertWizard(tk.Toplevel):
         self.algo_var.set("RSA 2048")
         self.pwd_var.set("")
         self.pwd2_var.set("")
-        self.key_info_var.set("尚未生成密钥")
-        self.cert_info_var.set("尚未获取证书")
-        self.p12_info_var.set("尚未生成 P12")
+        self.key_info_var.set(t('尚未生成密钥'))
+        self.cert_info_var.set(t('尚未获取证书'))
+        self.p12_info_var.set(t('尚未生成 P12'))
         self.reuse_result_var.set("")
         self.reuse_copy_p12_var.set(False)
         self.reuse_cert_list.delete(0, "end")
@@ -4404,7 +4441,7 @@ def main() -> None:
         try:
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("程序出错", detail[-2000:])
+            messagebox.showerror(t('程序出错'), detail[-2000:])
             root.destroy()
         except Exception:
             pass

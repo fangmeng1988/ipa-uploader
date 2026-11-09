@@ -1,8 +1,12 @@
-# IPA 上架助手
+# IPA 上架助手 / IPA Uploader
+
+[中文](#中文) | [English](#english)
+
+## 中文
 
 面向 iOS 应用发布流程的 Windows 桌面工具：管理 Apple 签名证书、生成 App 备案所需信息、通过 App Store Connect API 直接上传 IPA，无需安装 Transporter 或 Xcode。
 
-## 下载
+### 下载
 
 - **Gitee 发行版（国内推荐）**：[最新版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest)
 - **GitHub Releases（海外）**：[最新版](https://github.com/fangmeng1988/ipa-uploader/releases/latest)
@@ -45,11 +49,18 @@
 - 同事导入后即可直接上传，无需逐项手填
 - 导入不会覆盖本机“默认 IPA 目录”，覆盖前会自动备份旧 `config.json`
 
+### 多语言
+
+- 支持简体中文 / English，首次启动默认跟随系统语言
+- 设置页切换语言，保存后可一键重启生效
+
+![设置](img/settings.png)
+
 ## 快速开始
 
 ### 方式一：直接下载
 
-从 [Gitee 发行版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) 或 [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.2-win64.zip`，解压后运行 `IPAUploader.exe`。
+从 [Gitee 发行版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) 或 [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.4.0-win64.zip`，解压后运行 `IPAUploader.exe`。
 
 ### 方式二：从源码运行
 
@@ -108,6 +119,7 @@ build-exe.bat
 
 ```text
 app.pyw            主程序（Tkinter 单文件）
+i18n.py            中英文翻译表
 ipa.ico            应用图标
 build-exe.bat      PyInstaller 打包脚本
 version_info.txt   exe 版本信息
@@ -131,3 +143,145 @@ fangmeng · [github.com/fangmeng1988](https://github.com/fangmeng1988)
 
 - 仅支持 Windows。
 - 请遵守 Apple 开发者协议，仅上传你有权发布的应用。
+
+## English
+
+A Windows desktop tool for the iOS release workflow: manage Apple signing certificates, generate the information required for App filing (ICP), and upload IPA builds directly through the App Store Connect API — no Transporter or Xcode required.
+
+### Download
+
+- **Gitee releases (recommended in mainland China)**: [latest](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest)
+- **GitHub Releases**: [latest](https://github.com/fangmeng1988/ipa-uploader/releases/latest)
+
+On first launch, if SmartScreen reports “Unknown publisher”, click “More info → Run anyway”.
+
+### Features
+
+#### Upload
+
+- Parse Bundle ID, version, build number and file size automatically after selecting an IPA
+- Upload directly through the App Store Connect API with live progress and logs
+- Upload history, duration statistics, log viewer and command copy
+
+![Upload](img/upload-en.png)
+
+#### Certificates
+
+- Create a certificate request (CSR), submit it to Apple and download the issued certificate
+- Sync existing certificates from Apple or import a local `.cer`
+- Build a P12 with the intermediate certificate chain, ready for HBuilderX and other packaging tools
+- Fetch, download and create provisioning profiles, linked to certificate archives
+
+![Certificates](img/cert-en.png)
+
+#### App filing
+
+- Parse IPA, `.mobileprovision`, `.cer` and `.p12` files to read the signing certificate
+- Output Bundle ID, certificate public key and fingerprints with one-click copy:
+  - Public key: PEM, single-line Base64, continuous hex, space-separated hex
+  - Fingerprints: SHA-1 (continuous / colon-separated), certificate MD5
+- “Copy all three App filing values”: Bundle ID, public key and signature SHA-1 in one go
+
+![App filing](img/filing-en.png)
+
+#### Config migration
+
+- Export / import `.ipak` configuration files containing the Key ID, Issuer ID and `.p8` private key
+- Optional password protection with AES-256-GCM; plain-text export requires confirmation
+- Colleagues can import the file and start uploading immediately
+- The local “default IPA directory” is preserved, and the old `config.json` is backed up before overwriting
+
+#### Languages
+
+- Simplified Chinese and English; follows the system language on first launch
+- Switch the language in Settings and restart with one click
+
+![Settings](img/settings-en.png)
+
+### Quick start
+
+#### Option 1: Download
+
+Download `IPAUploader-v1.4.0-win64.zip` from [Gitee releases](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) or [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest), extract it and run `IPAUploader.exe`.
+
+#### Option 2: Run from source
+
+Requirements: Windows 10 / 11, Python 3.10 or later.
+
+```bat
+pip install -r requirements.txt
+start.bat
+```
+
+Or run directly:
+
+```bat
+python app.pyw
+```
+
+#### Build the exe
+
+```bat
+build-exe.bat
+```
+
+Output: `dist\IPAUploader.exe` (single file, no console window).
+
+### Initial setup (upload)
+
+1. Sign in to App Store Connect and open **Users and Access → Integrations → App Store Connect API**. Create a team key and download the `.p8` file (it can only be downloaded once).
+2. Open Settings in the tool, enter the Key ID and Issuer ID, select the `.p8` file and save.
+3. If a colleague has already configured it, ask them to export an `.ipak` file and import it under **Settings → Config migration**.
+4. Keys stay on the local machine and are never uploaded to any third party.
+
+### App filing values
+
+| Platform | Public key | Value for “signature MD5” |
+| --- | --- | --- |
+| iOS | Public key of the certificate | Certificate SHA-1 (40 hex characters) |
+
+The form field is named “signature MD5”, but iOS requires the certificate **SHA-1**. The MD5 shown by this tool is for reference only.
+
+Supported inputs:
+
+- **IPA**: reads `Info.plist` and `embedded.mobileprovision`; App Store downloads have the profile stripped, so use `.cer` or `.p12` instead
+- **.mobileprovision**: returns the Bundle ID, team ID and signing certificate
+- **.cer / .crt / .pem**: reads the certificate public key and fingerprints; the Bundle ID must be entered manually
+- **.p12 / .pfx**: enter the export password to read the certificate
+
+### Data and security
+
+- No API keys, private keys or certificates are bundled
+- Configuration, keys, certificate archives and upload history are stored locally in `%APPDATA%\IPAUploader`
+- The legacy data directory is reused in place; existing data is never moved or overwritten
+- Uploads use an ES256 JWT; access tokens exist only in memory
+- `.ipak` export files contain the API private key; transfer them over a trusted channel and delete them after use
+
+### Project structure
+
+```text
+app.pyw            main application (single-file Tkinter)
+i18n.py            Chinese / English translations
+ipa.ico            application icon
+build-exe.bat      PyInstaller build script
+version_info.txt   exe version information
+requirements.txt   Python dependencies
+img/               README screenshots
+```
+
+### Dependencies
+
+- [cryptography](https://cryptography.io/): certificate parsing, CSR generation, P12 assembly and JWT signing
+
+### Author
+
+fangmeng · [github.com/fangmeng1988](https://github.com/fangmeng1988)
+
+### License
+
+Released under the [MIT](LICENSE) license.
+
+### Notes
+
+- Windows only.
+- Follow Apple’s Developer Agreement and only upload apps you have the right to distribute.
