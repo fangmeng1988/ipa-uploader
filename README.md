@@ -37,11 +37,18 @@ Windows 用户可直接下载打包版：[最新 Release](https://github.com/fan
 
 ![备案](img/filing.png)
 
+### 配置迁移
+
+- 设置页支持导出 / 导入 `.ipak` 配置文件，包含 Key ID、Issuer ID 与 `.p8` 私钥
+- 导出时可设置密码：AES-256-GCM 加密；留空则明文保存并提示风险
+- 同事导入后即可直接上传，无需逐项手填
+- 导入不会覆盖本机“默认 IPA 目录”，覆盖前会自动备份旧 `config.json`
+
 ## 快速开始
 
 ### 方式一：直接下载
 
-从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.0-win64.zip`，解压后运行 `IPAUploader.exe`。
+从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.1-win64.zip`，解压后运行 `IPAUploader.exe`。
 
 ### 方式二：从源码运行
 
@@ -70,7 +77,8 @@ build-exe.bat
 
 1. 登录 App Store Connect，进入 **用户和访问 → 集成 → App Store Connect API**，创建团队密钥并下载 `.p8` 文件（只能下载一次）。
 2. 打开工具的“设置”页，填写 Key ID、Issuer ID，选择 `.p8` 文件并保存。
-3. 密钥仅保存在本机，不会上传到任何第三方服务。
+3. 如果同事已经配置好，也可以让对方导出 `.ipak` 文件，你在“设置 → 配置迁移”中导入即可。
+4. 密钥仅保存在本机，不会上传到任何第三方服务。
 
 ## 备案填写口径
 
@@ -93,6 +101,7 @@ build-exe.bat
 - 配置、密钥、证书档案与上传历史均保存在本机 `%APPDATA%\IPAUploader`
 - 旧版本数据目录会自动原地兼容，不会移动或覆盖已有数据
 - 上传使用 ES256 JWT，访问令牌只存在于内存
+- `.ipak` 导出文件包含 API 私钥，请通过可信渠道传输，并在使用后及时删除
 
 ## 项目结构
 

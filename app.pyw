@@ -31,6 +31,8 @@ try:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives.serialization import pkcs12
     from cryptography.x509.oid import NameOID
     CRYPTO_ERROR = ""
@@ -74,6 +76,11 @@ COLOR_MUTED = "#5f6b7a"
 COLOR_INFO = "#1a5fb4"
 COLOR_HEADER = "#173a5e"
 
+CONFIG_EXPORT_APP = "IPAUploader"
+CONFIG_EXPORT_FORMAT = 1
+CONFIG_KDF_ITERATIONS = 200_000
+CONFIG_EXPORT_AAD = b"IPAUploader-config"
+
 
 def app_icon_path() -> str:
     bases = []
@@ -105,6 +112,101 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
+
+
+def _derive_export_key(password: str, salt: bytes, iterations: int) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+    )
+    return kdf.derive(password.encode("utf-8"))
+
+
+def encrypt_config_payload(payload: dict, password: str) -> dict:
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(12)
+    key = _derive_export_key(password, salt, CONFIG_KDF_ITERATIONS)
+    plain = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(nonce, plain, CONFIG_EXPORT_AAD)
+    return {
+        "app": CONFIG_EXPORT_APP,
+        "format": CONFIG_EXPORT_FORMAT,
+        "encrypted": True,
+        "kdf": {
+            "algorithm": "pbkdf2-sha256",
+            "iterations": CONFIG_KDF_ITERATIONS,
+            "salt": base64.b64encode(salt).decode("ascii"),
+        },
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+
+
+def decrypt_config_payload(document: dict, password: str) -> dict:
+    info = document.get("kdf") or {}
+    if str(info.get("algorithm") or "pbkdf2-sha256").lower() != "pbkdf2-sha256":
+        raise ValueError("不支持的加密算法")
+    try:
+        iterations = int(info.get("iterations") or CONFIG_KDF_ITERATIONS)
+        salt = base64.b64decode(info.get("salt") or "", validate=True)
+        nonce = base64.b64decode(document.get("nonce") or "", validate=True)
+        ciphertext = base64.b64decode(document.get("ciphertext") or "", validate=True)
+    except Exception as exc:
+        raise ValueError("配置文件格式不正确") from exc
+    if not 10_000 <= iterations <= 2_000_000 or len(salt) < 8 or len(nonce) != 12:
+        raise ValueError("配置文件参数异常")
+    key = _derive_export_key(password, salt, iterations)
+    try:
+        plain = AESGCM(key).decrypt(nonce, ciphertext, CONFIG_EXPORT_AAD)
+    except Exception as exc:
+        raise ValueError("密码错误或配置文件已损坏") from exc
+    data = json.loads(plain.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("配置文件内容不正确")
+    return data
+
+
+def normalize_imported_config(document: dict) -> tuple[dict, bytes, str]:
+    config = document.get("config") or {}
+    key_file = document.get("key_file") or {}
+    if not isinstance(config, dict) or not isinstance(key_file, dict):
+        raise ValueError("配置文件缺少 config 或 key_file 字段")
+    key_id = str(config.get("api_key_id") or "").strip()
+    issuer = str(config.get("api_issuer") or "").strip()
+    key_type = str(config.get("api_key_type") or "team").lower()
+    app_id = str(config.get("app_apple_id") or "").strip()
+    if not key_id or not issuer:
+        raise ValueError("配置文件缺少 Key ID 或 Issuer ID")
+    if key_type not in ("team", "individual"):
+        key_type = "team"
+    if app_id and not app_id.isdigit():
+        raise ValueError("配置文件中的 App 数字 ID 不是纯数字")
+    content = str(key_file.get("content_b64") or "")
+    if not content:
+        raise ValueError("配置文件中没有 .p8 私钥")
+    try:
+        key_bytes = base64.b64decode(content, validate=True)
+    except Exception as exc:
+        raise ValueError("私钥内容不是有效的 Base64") from exc
+    if CRYPTO_ERROR:
+        if not key_bytes.startswith(b"-----BEGIN"):
+            raise ValueError("私钥内容不是有效的 PEM")
+    else:
+        try:
+            serialization.load_pem_private_key(key_bytes, password=None)
+        except Exception as exc:
+            raise ValueError("私钥内容不是有效的 PEM") from exc
+    safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", key_id)[:64] or "key"
+    prefix = "ApiKey" if key_type == "individual" else "AuthKey"
+    name = f"{prefix}_{safe_id}.p8"
+    return {
+        "app_apple_id": app_id,
+        "api_key_id": key_id,
+        "api_issuer": issuer,
+        "api_key_type": key_type,
+    }, key_bytes, name
 
 
 def load_history() -> list[dict]:
@@ -1408,8 +1510,18 @@ class App(tk.Tk):
         ttk.Entry(other, textvariable=self.var_ipa_dir).grid(row=0, column=1, sticky="ew", padx=px(8))
         ttk.Button(other, text="浏览…", command=lambda: self._browse_dir(self.var_ipa_dir)).grid(row=0, column=2)
 
+        transfer = ttk.LabelFrame(tab, text=" 配置迁移 ", padding=(px(14), px(12)))
+        transfer.grid(row=2, column=0, sticky="ew", pady=(px(12), 0))
+        ttk.Button(transfer, text="导出配置…", command=self.export_config).pack(side="left")
+        ttk.Button(transfer, text="导入配置…", command=self.import_config).pack(side="left", padx=px(8))
+        ttk.Label(
+            transfer,
+            text="导出的 .ipak 含 API 私钥，可选密码加密；请通过可信渠道传输。",
+            style="Hint.TLabel",
+        ).pack(side="left", padx=(px(12), 0))
+
         actions = ttk.Frame(tab)
-        actions.grid(row=2, column=0, sticky="w", pady=(px(16), 0))
+        actions.grid(row=3, column=0, sticky="w", pady=(px(16), 0))
         ttk.Button(actions, text="保存设置", command=self.save_settings).pack(side="left")
         self.lbl_settings_status = ttk.Label(actions, text="", foreground=COLOR_MUTED)
         self.lbl_settings_status.pack(side="left", padx=(px(14), 0))
@@ -1487,6 +1599,163 @@ class App(tk.Tk):
         if not target.exists() or target.read_bytes() != source.read_bytes():
             shutil.copy2(source, target)
         return target
+
+    # ------------------------------------------------------------ 配置导入导出
+
+    def _collect_export_payload(self) -> dict:
+        key_id = self.var_key_id.get().strip()
+        issuer = self.var_issuer.get().strip()
+        key_path = self.var_key_path.get().strip()
+        app_id = self.var_app_id.get().strip()
+        if not key_id or not issuer:
+            raise ValueError("请先填写 Key ID 与 Issuer ID。")
+        if app_id and not app_id.isdigit():
+            raise ValueError("App 数字 ID 只能填纯数字。")
+        if not key_path or not Path(key_path).is_file():
+            raise ValueError("当前 .p8 私钥文件不存在，请重新选择。")
+        key_bytes = Path(key_path).read_bytes()
+        if CRYPTO_ERROR:
+            if not key_bytes.startswith(b"-----BEGIN"):
+                raise ValueError("当前 .p8 不是有效的 PEM 私钥。")
+        else:
+            try:
+                serialization.load_pem_private_key(key_bytes, password=None)
+            except Exception as exc:
+                raise ValueError("当前 .p8 不是有效的私钥文件。") from exc
+        return {
+            "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "config": {
+                "app_apple_id": app_id,
+                "api_key_id": key_id,
+                "api_issuer": issuer,
+                "api_key_type": self.var_key_type.get() or "team",
+            },
+            "key_file": {
+                "name": Path(key_path).name,
+                "content_b64": base64.b64encode(key_bytes).decode("ascii"),
+            },
+        }
+
+    def export_config(self) -> None:
+        try:
+            payload = self._collect_export_payload()
+        except Exception as exc:
+            messagebox.showerror("无法导出", str(exc))
+            return
+        password = self._ask_simple_password(
+            "导出配置", "设置导出密码（可留空；留空则明文保存）：",
+        )
+        if password is None:
+            return
+        if password and CRYPTO_ERROR:
+            messagebox.showerror("缺少依赖", "加密导出需要 cryptography 库。\n\n" + CRYPTO_ERROR)
+            return
+        if not password and not messagebox.askyesno(
+            "未加密导出",
+            "未设置密码时，.p8 私钥会以明文（Base64）写入导出文件。\n\n"
+            "请仅通过可信渠道传输，并在使用后及时删除。确定继续吗？",
+            icon="warning",
+        ):
+            return
+        chosen = filedialog.asksaveasfilename(
+            title="导出配置",
+            initialdir=str(Path.home()),
+            initialfile=f"IPAUploader-配置-{datetime.now():%Y%m%d}.ipak",
+            defaultextension=".ipak",
+            filetypes=[
+                ("IPA 上架助手配置", "*.ipak"),
+                ("JSON 文件", "*.json"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not chosen:
+            return
+        try:
+            document = (
+                encrypt_config_payload(payload, password)
+                if password
+                else {
+                    "app": CONFIG_EXPORT_APP,
+                    "format": CONFIG_EXPORT_FORMAT,
+                    "encrypted": False,
+                    **payload,
+                }
+            )
+            Path(chosen).write_text(json.dumps(document, ensure_ascii=False, indent=2), "utf-8")
+        except Exception as exc:
+            messagebox.showerror("导出失败", str(exc))
+            return
+        self._settings_status(f"配置已导出：{Path(chosen).name}", "ok")
+
+    def import_config(self) -> None:
+        chosen = filedialog.askopenfilename(
+            title="导入配置",
+            filetypes=[("IPA 上架助手配置", "*.ipak *.json"), ("所有文件", "*.*")],
+        )
+        if not chosen:
+            return
+        try:
+            document = json.loads(Path(chosen).read_text("utf-8"))
+        except Exception as exc:
+            messagebox.showerror("无法读取", f"不是有效的 JSON 文件：\n{exc}")
+            return
+        if not isinstance(document, dict) or document.get("app") != CONFIG_EXPORT_APP:
+            messagebox.showerror("不是本工具的配置", "请选择由“导出配置”生成的 .ipak 文件。")
+            return
+        if document.get("format") != CONFIG_EXPORT_FORMAT:
+            messagebox.showerror("版本不支持", "该配置文件的格式版本与本工具不一致。")
+            return
+        payload = document
+        if document.get("encrypted"):
+            if CRYPTO_ERROR:
+                messagebox.showerror("缺少依赖", "解密配置需要 cryptography 库。\n\n" + CRYPTO_ERROR)
+                return
+            password = self._ask_simple_password("导入配置", "请输入导出时设置的密码：")
+            if password is None:
+                return
+            try:
+                payload = decrypt_config_payload(document, password)
+            except Exception as exc:
+                messagebox.showerror("无法导入", str(exc))
+                return
+        try:
+            imported, key_bytes, key_name = normalize_imported_config(payload)
+        except Exception as exc:
+            messagebox.showerror("配置内容无效", str(exc))
+            return
+        summary = (
+            f"Key ID：{imported['api_key_id']}\n"
+            f"Issuer ID：{imported['api_issuer']}\n"
+            f"Key 类型：{'Individual' if imported['api_key_type'] == 'individual' else 'Team'}\n"
+            f"App 数字 ID：{imported['app_apple_id'] or '（自动识别）'}\n"
+            f"私钥文件：{key_name}\n\n"
+            "导入后将覆盖当前 API 配置；本机“默认 IPA 目录”保持不变。"
+        )
+        if not messagebox.askyesno("导入配置", summary + "\n\n确定导入吗？"):
+            return
+        try:
+            KEYS_DIR.mkdir(parents=True, exist_ok=True)
+            target = KEYS_DIR / key_name
+            if target.exists() and target.read_bytes() != key_bytes:
+                target = KEYS_DIR / f"{target.stem}-{datetime.now():%Y%m%d%H%M%S}.p8"
+            if not target.exists():
+                target.write_bytes(key_bytes)
+            if CONFIG_PATH.exists():
+                backup = CONFIG_PATH.with_name(
+                    f"{CONFIG_PATH.stem}.bak-{datetime.now():%Y%m%d-%H%M%S}.json"
+                )
+                shutil.copy2(CONFIG_PATH, backup)
+            cfg = dict(self.cfg)
+            cfg.update(imported)
+            cfg["api_key_path"] = str(target)
+            save_config(cfg)
+        except Exception as exc:
+            messagebox.showerror("导入失败", str(exc))
+            return
+        self.cfg = cfg
+        self._load_settings_into_form()
+        self._settings_status(f"配置已导入：{imported['api_key_id']}", "ok")
+        self._status("配置已导入，可以选择 IPA 开始上传", "muted")
 
     # ------------------------------------------------------------ 证书页
 
