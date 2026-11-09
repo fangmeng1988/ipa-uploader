@@ -48,7 +48,7 @@ from i18n import LANGUAGES, detect_system_language, get_language, set_language, 
 
 APP_TITLE = "IPA 上架助手"
 APP_AUTHOR = "fangmeng"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 PROJECT_URL = "https://github.com/fangmeng1988/ipa-uploader"
 APP_ICON = "ipa.ico"
 _DATA_ROOT = Path(os.environ.get("APPDATA") or Path.home())
@@ -1656,11 +1656,25 @@ class App(tk.Tk):
 
     def _restart_app(self) -> None:
         try:
+            env = os.environ.copy()
+            # 清理 PyInstaller 单文件进程变量，否则子进程会复用父进程即将删除的临时目录
+            for key in (
+                "_MEIPASS2",
+                "_PYI_APPLICATION_HOME_DIR",
+                "_PYI_ARCHIVE_FILE",
+                "_PYI_PARENT_PROCESS_LEVEL",
+                "_PYI_SPLASH_IPC",
+                "PYTHONHOME",
+                "PYTHONPATH",
+            ):
+                env.pop(key, None)
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable], close_fds=True)
+                subprocess.Popen([sys.executable], close_fds=True, env=env)
             else:
                 subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve())], close_fds=True,
+                    [sys.executable, str(Path(__file__).resolve())],
+                    close_fds=True,
+                    env=env,
                 )
         except Exception as exc:
             messagebox.showerror(

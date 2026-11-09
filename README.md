@@ -60,7 +60,7 @@
 
 ### 方式一：直接下载
 
-从 [Gitee 发行版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) 或 [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.4.0-win64.zip`，解压后运行 `IPAUploader.exe`。
+从 [Gitee 发行版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) 或 [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.4.1-win64.zip`，解压后运行 `IPAUploader.exe`。
 
 ### 方式二：从源码运行
 
@@ -202,7 +202,7 @@ On first launch, if SmartScreen reports “Unknown publisher”, click “More i
 
 #### Option 1: Download
 
-Download `IPAUploader-v1.4.0-win64.zip` from [Gitee releases](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) or [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest), extract it and run `IPAUploader.exe`.
+Download `IPAUploader-v1.4.1-win64.zip` from [Gitee releases](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) or [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest), extract it and run `IPAUploader.exe`.
 
 #### Option 2: Run from source
 
