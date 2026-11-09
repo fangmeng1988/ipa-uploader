@@ -45,6 +45,9 @@ from tkinter import font as tkfont
 from tkinter.scrolledtext import ScrolledText
 
 APP_TITLE = "IPA 上架助手"
+APP_AUTHOR = "fangmeng"
+APP_VERSION = "1.3.2"
+PROJECT_URL = "https://github.com/fangmeng1988/ipa-uploader"
 APP_ICON = "ipa.ico"
 _DATA_ROOT = Path(os.environ.get("APPDATA") or Path.home())
 APP_DIR = _DATA_ROOT / "IPAUploader"
@@ -1326,10 +1329,16 @@ class App(tk.Tk):
             header, text=APP_TITLE, bg=COLOR_HEADER, fg="white",
             font=(self.ui_family, 16, "bold"),
         ).pack(side="left", padx=px(22))
+        meta = tk.Frame(header, bg=COLOR_HEADER)
+        meta.pack(side="right", padx=px(22))
         tk.Label(
-            header, text="证书 · 备案 · 上架", bg=COLOR_HEADER, fg="#9fb6cf",
+            meta, text="证书 · 备案 · 上架", bg=COLOR_HEADER, fg="#9fb6cf",
             font=(self.ui_family, 9),
-        ).pack(side="right", padx=px(22))
+        ).pack(anchor="e")
+        tk.Label(
+            meta, text=f"by {APP_AUTHOR}", bg=COLOR_HEADER, fg="#7f9bb8",
+            font=(self.ui_family, 8),
+        ).pack(anchor="e")
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True, padx=px(14), pady=(px(12), px(14)))
@@ -1520,8 +1529,18 @@ class App(tk.Tk):
             style="Hint.TLabel",
         ).pack(side="left", padx=(px(12), 0))
 
+        about = ttk.LabelFrame(tab, text=" 关于 ", padding=(px(14), px(12)))
+        about.grid(row=3, column=0, sticky="ew", pady=(px(12), 0))
+        ttk.Label(about, text=f"{APP_TITLE} v{APP_VERSION}", style="Value.TLabel").pack(side="left")
+        ttk.Label(
+            about, text=f"作者：{APP_AUTHOR}", style="Hint.TLabel",
+        ).pack(side="left", padx=(px(16), 0))
+        ttk.Button(
+            about, text="项目主页", command=lambda: webbrowser.open(PROJECT_URL),
+        ).pack(side="right")
+
         actions = ttk.Frame(tab)
-        actions.grid(row=3, column=0, sticky="w", pady=(px(16), 0))
+        actions.grid(row=4, column=0, sticky="w", pady=(px(16), 0))
         ttk.Button(actions, text="保存设置", command=self.save_settings).pack(side="left")
         self.lbl_settings_status = ttk.Label(actions, text="", foreground=COLOR_MUTED)
         self.lbl_settings_status.pack(side="left", padx=(px(14), 0))

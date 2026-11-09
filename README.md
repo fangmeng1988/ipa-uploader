@@ -48,7 +48,7 @@ Windows 用户可直接下载打包版：[最新 Release](https://github.com/fan
 
 ### 方式一：直接下载
 
-从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.1-win64.zip`，解压后运行 `IPAUploader.exe`。
+从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.2-win64.zip`，解压后运行 `IPAUploader.exe`。
 
 ### 方式二：从源码运行
 
@@ -117,6 +117,10 @@ img/               README 截图
 ## 依赖
 
 - [cryptography](https://cryptography.io/)：证书解析、CSR 生成、P12 合成与 JWT 签名
+
+## 作者
+
+fangmeng · [github.com/fangmeng1988](https://github.com/fangmeng1988)
 
 ## 许可证
 
