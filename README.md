@@ -4,7 +4,8 @@
 
 ## 下载
 
-Windows 用户可直接下载打包版：[最新 Release](https://github.com/fangmeng1988/ipa-uploader/releases/latest)
+- **Gitee 发行版（国内推荐）**：[最新版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest)
+- **GitHub Releases（海外）**：[最新版](https://github.com/fangmeng1988/ipa-uploader/releases/latest)
 
 首次运行如遇 SmartScreen 提示“未知发布者”，点击“更多信息 → 仍要运行”。
 
@@ -48,7 +49,7 @@ Windows 用户可直接下载打包版：[最新 Release](https://github.com/fan
 
 ### 方式一：直接下载
 
-从 [Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.2-win64.zip`，解压后运行 `IPAUploader.exe`。
+从 [Gitee 发行版](https://gitee.com/fangmeng1988/ipa-uploader/releases/latest) 或 [GitHub Releases](https://github.com/fangmeng1988/ipa-uploader/releases/latest) 下载 `IPAUploader-v1.3.2-win64.zip`，解压后运行 `IPAUploader.exe`。
 
 ### 方式二：从源码运行
 
